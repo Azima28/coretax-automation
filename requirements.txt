@@ -1,0 +1,4 @@
+playwright
+asyncio
+requests
+pdfplumber
