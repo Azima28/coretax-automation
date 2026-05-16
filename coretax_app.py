@@ -286,20 +286,27 @@ class CoreTaxApp(ctk.CTk):
         try:
             self.btn_run.configure(state="disabled", text="PROCESSING...")
             
-            tid = self._get_taxpayer_id()
-            if not tid:
-                self.add_log("[!] Gagal mendapatkan Taxpayer ID. Pastikan sudah login / Cek Koneksi.")
+            tid = self.entry_tid.get().strip()
+            self.token = self.entry_token.get().strip()
+            self.cookie = self.entry_cookie.get().strip()
+            
+            if not tid or not self.token or not self.cookie:
+                self.add_log("[!] Gagal mendapatkan Taxpayer ID / Sesi. Pastikan sudah login.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
                 
             wb = openpyxl.load_workbook(self.file_path)
             
-            # 1. CARI SHEET YANG RELEVAN (Cari yang ada 'Nomor Faktur')
+            # 1. CARI SHEET YANG RELEVAN (Prioritaskan PM jika ada)
             target_sheet_name = None
-            for sn in wb.sheetnames:
+            # Cek dulu apakah ada sheet dengan nama mengandung 'PM'
+            pm_sheets = [sn for sn in wb.sheetnames if "PM" in sn.upper()]
+            other_sheets = [sn for sn in wb.sheetnames if "PM" not in sn.upper()]
+            
+            for sn in (pm_sheets + other_sheets): # Prioritaskan PM
                 ws_temp = wb[sn]
                 found_header = False
-                for r in range(1, 15): # Cek 15 baris pertama
+                for r in range(1, 15):
                     try:
                         row_vals = [str(cell.value).upper() if cell.value else "" for cell in ws_temp[r]]
                         if any("NOMOR FAKTUR" in v for v in row_vals):
