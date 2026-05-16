@@ -548,19 +548,24 @@ class CoreTaxApp(ctk.CTk):
                 if core not in grouped_map: grouped_map[core] = []
                 grouped_map[core].append(orig)
             
-            # Tampilkan Mapping Window hanya untuk Identitas Inti yang sudah bersih
-            mapping_window = MappingWindow(self, list(grouped_map.keys()), list(self.dynamic_categories.keys()))
-            self.wait_window(mapping_window)
-            core_mapping_result = mapping_window.result
+            # Tampilkan Mapping Window dengan info jumlah item agar transparan
+            display_names = [f"{core} ({len(items)} item)" for core, items in grouped_map.items()]
+            # Mapping balik dari display_name ke core_name untuk memproses hasil
+            display_to_core = {f"{core} ({len(items)} item)": core for core, items in grouped_map.items()}
             
-            if not core_mapping_result:
+            mapping_window = MappingWindow(self, display_names, list(self.dynamic_categories.keys()))
+            self.wait_window(mapping_window)
+            display_mapping_result = mapping_window.result
+            
+            if not display_mapping_result:
                 self.add_log("[!] Mapping dibatalkan.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
             
-            # Terapkan hasil mapping ke semua variasi nama aslinya
+            # Balikkan dari display_name ke Original Names
             final_mapping = {}
-            for core, category in core_mapping_result.items():
+            for d_name, category in display_mapping_result.items():
+                core = display_to_core[d_name]
                 for orig in grouped_map[core]:
                     final_mapping[orig] = category
 
