@@ -565,17 +565,16 @@ class CoreTaxApp(ctk.CTk):
                 
                 return " ".join(words[:2])
 
-            # Buat Map: {original_name: core_name}
-            name_to_core = {name: get_core_identity(name) for name in all_unique_names}
-            unique_cores = sorted(list(set(name_to_core.values())))
+            # TAHAP 3: GLOBAL MAPPING (Dynamic Grouping)
+            self.add_log(f"[*] Tahap 3: Men-scan {len(all_unique_names)} barang unik dari PDF...")
             
-            self.add_log(f"[?] Menunggu validasi mapping untuk {len(unique_cores)} kelompok barang...")
-            mapping_window = MappingWindow(self, unique_cores, list(self.dynamic_categories.keys()))
-            mapping_window.attributes('-topmost', True) # Pastikan muncul di depan
+            self.add_log(f"[?] Menunggu validasi mapping untuk {len(all_unique_names)} barang (ASLI)...")
+            mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
             self.wait_window(mapping_window)
-            core_mapping = mapping_window.result # {core_name: category}
             
-            if not core_mapping:
+            final_mapping = mapping_window.result # {original_name: category}
+            
+            if not final_mapping:
                 self.add_log("[!] Mapping dibatalkan.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
@@ -593,9 +592,7 @@ class CoreTaxApp(ctk.CTk):
                 category_totals = {} # {Category: {'qty': 0, 'total': 0}}
                 
                 for it in items:
-                    orig_name = it['name']
-                    core_name = name_to_core.get(orig_name)
-                    cat = core_mapping.get(core_name)
+                    cat = final_mapping.get(it['name'])
                     
                     if cat and cat != "Abaikan":
                         if cat not in category_totals: category_totals[cat] = {'qty': 0, 'total': 0}
