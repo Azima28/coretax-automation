@@ -536,10 +536,7 @@ class CoreTaxApp(ctk.CTk):
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            # TAHAP 3: GLOBAL MAPPING (Smart Grouping / Reduce)
-            self.add_log(f"[*] Tahap 3: Meringkas {len(all_unique_names)} barang menjadi kelompok unik...")
-            
-            # TAHAP 3: GLOBAL MAPPING (Smart Grouping / Reduce)
+            # TAHAP 3: GLOBAL MAPPING (Smart Grouping)
             self.add_log(f"[*] Tahap 3: Meringkas {len(all_unique_names)} barang menjadi kelompok unik...")
             
             # Algoritma Pembersihan Agresif (Anchor Grouping)
@@ -556,20 +553,19 @@ class CoreTaxApp(ctk.CTk):
                 first_word = words[0]
                 
                 if first_word in anchors:
-                    # Khusus kata kunci utama, kita ambil 1 kata saja agar gabung semua
                     if first_word in ["JASA", "SP", "SMN", "MATERIAL", "ULTRAPRO", "SOLAR", "BIOSOLAR", "ABU"]:
                         return first_word
-                    # Untuk yang lain ambil 2 kata agar tidak terlalu umum
                     return " ".join(words[:2])
                 
-                # Jika tidak ada anchor, ambil 2 kata pertama sebagai identitas
                 return " ".join(words[:2])
 
             # Buat Map: {original_name: core_name}
             name_to_core = {name: get_core_identity(name) for name in all_unique_names}
             unique_cores = sorted(list(set(name_to_core.values())))
             
+            self.add_log(f"[?] Menunggu validasi mapping untuk {len(unique_cores)} kelompok barang...")
             mapping_window = MappingWindow(self, unique_cores, list(self.dynamic_categories.keys()))
+            mapping_window.attributes('-topmost', True) # Pastikan muncul di depan
             self.wait_window(mapping_window)
             core_mapping = mapping_window.result # {core_name: category}
             
