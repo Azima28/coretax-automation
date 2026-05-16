@@ -1,135 +1,172 @@
-import tkinter as tk
-import customtkinter as ctk
+import os
+import requests
 import pandas as pd
 import openpyxl
-from openpyxl.styles import NumberFormatDescriptor
-import pdfplumber
-import requests
-import base64
-import io
-import re
-import time
-import json
-import os
+import customtkinter as ctk
+from tkinter import filedialog, messagebox
 import threading
+import time
+import re
+import io
+import base64
+import pdfplumber
+import json
+
+# --- CONFIG ---
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
 class MappingWindow(ctk.CTkToplevel):
-    def __init__(self, parent, unique_names, categories):
+    def __init__(self, parent, unique_names, categories, initial_mapping=None):
         super().__init__(parent)
-        self.title("Batch Mapping: Tentukan Kategori Barang")
+        self.title("MAPPING BARANG KE KOLOM EXCEL")
         self.geometry("600x500")
         self.result = {}
-        self.unique_names = unique_names
         self.categories = ["Abaikan"] + categories
         
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(self, text="Petakan nama barang dari PDF ke kolom Excel yang sesuai:", font=("Arial", 14, "bold")).pack(pady=10)
         
-        label = ctk.CTkLabel(self, text="Ditemukan beberapa jenis barang baru.\nSilakan tentukan kolom Excel untuk setiap nama barang:", font=("Arial", 14, "bold"))
-        label.grid(row=0, column=0, pady=20, padx=20)
+        scroll_frame = ctk.CTkScrollableFrame(self, width=550, height=350)
+        scroll_frame.pack(padx=10, pady=10, fill="both", expand=True)
         
-        self.scroll_frame = ctk.CTkScrollableFrame(self)
-        self.scroll_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=10)
-        self.scroll_frame.grid_columnconfigure(1, weight=1)
-        
-        self.combos = {}
-        for i, name in enumerate(unique_names):
-            lbl = ctk.CTkLabel(self.scroll_frame, text=f"Nama : {name}", anchor="w")
-            lbl.grid(row=i, column=0, padx=10, pady=10, sticky="w")
+        self.menus = {}
+        for name in unique_names:
+            row = ctk.CTkFrame(scroll_frame)
+            row.pack(fill="x", pady=2, padx=5)
             
-            combo = ctk.CTkComboBox(self.scroll_frame, values=self.categories, width=250)
-            combo.set("Abaikan")
-            combo.grid(row=i, column=1, padx=10, pady=10, sticky="e")
-            self.combos[name] = combo
+            ctk.CTkLabel(row, text=name, width=250, anchor="w").pack(side="left", padx=5)
             
-        btn_save = ctk.CTkButton(self, text="SIMPAN & PROSES SEMUA", command=self.on_save, fg_color="green", hover_color="darkgreen", height=40, font=("Arial", 14, "bold"))
-        btn_save.grid(row=2, column=0, pady=20)
-        
+            # Default value based on initial mapping or Abaikan
+            default_val = initial_mapping.get(name, "Abaikan")
+            if default_val not in self.categories: default_val = "Abaikan"
+            
+            var = ctk.StringVar(value=default_val)
+            menu = ctk.CTkOptionMenu(row, values=self.categories, variable=var, width=200)
+            menu.pack(side="right", padx=5)
+            self.menus[name] = var
+            
+        ctk.CTkButton(self, text="SIMPAN & PROSES", command=self.on_save, fg_color="green").pack(pady=10)
         self.grab_set()
-        
+
     def on_save(self):
-        for name, combo in self.combos.items():
-            val = combo.get()
-            if val != "Abaikan":
-                self.result[name] = val
+        for name, var in self.menus.items():
+            self.result[name] = var.get()
         self.destroy()
 
 class CoreTaxApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("CoreTax Auto-Monitor Premium v1.3")
-        self.geometry("900x700")
-        ctk.set_appearance_mode("dark")
+        self.title("CoreTax Auto-Monitor (Robust v1.5)")
+        self.geometry("900x750")
         
-        # Variables
-        self.file_path = ""
         self.token = ""
         self.cookie = ""
-        self.dynamic_categories = {} # {Kategori: (Index_Harga, Index_QTY)}
+        self.tid = ""
+        self.file_path = ""
+        self.dynamic_categories = {}
+        self.history_file = "mapping_history.json"
         
-        # UI
         self.setup_ui()
-        
+
     def setup_ui(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
         
-        header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
+        # --- LOGIN SECTION ---
+        login_frame = ctk.CTkFrame(self)
+        login_frame.grid(row=0, column=0, padx=20, pady=10, sticky="ew")
         
-        ctk.CTkLabel(header_frame, text="CoreTax AI v1.3", font=("Arial", 28, "bold")).pack(side="left")
-        self.status_label = ctk.CTkLabel(header_frame, text="Status: Terhubung (TID: 275bb07a...)", text_color="green")
-        self.status_label.pack(side="right")
+        self.btn_login = ctk.CTkButton(login_frame, text="LOGIN CORETAX", command=self.start_login, fg_color="orange", text_color="black")
+        self.btn_login.pack(side="left", padx=10, pady=10)
         
-        # Session Inputs
-        session_frame = ctk.CTkFrame(self)
-        session_frame.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
-        session_frame.grid_columnconfigure(1, weight=1)
+        self.entry_token = ctk.CTkEntry(login_frame, placeholder_text="Token (Auto-filled)", width=200)
+        self.entry_token.pack(side="left", padx=5)
         
-        ctk.CTkLabel(session_frame, text="Bearer Token:").grid(row=0, column=0, padx=10, pady=5)
-        self.entry_token = ctk.CTkEntry(session_frame, placeholder_text="Masukkan Bearer Token...")
-        self.entry_token.grid(row=0, column=1, padx=10, pady=5, sticky="ew")
-        
-        ctk.CTkLabel(session_frame, text="Cookie:").grid(row=1, column=0, padx=10, pady=5)
-        self.entry_cookie = ctk.CTkEntry(session_frame, placeholder_text="Masukkan Cookie (id-ID)...")
-        self.entry_cookie.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
-        
-        ctk.CTkLabel(session_frame, text="TID (ID):").grid(row=2, column=0, padx=10, pady=5)
-        self.entry_tid = ctk.CTkEntry(session_frame, placeholder_text="Masukkan Taxpayer ID...")
-        self.entry_tid.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
-        
-        btn_action_frame = ctk.CTkFrame(session_frame, fg_color="transparent")
-        btn_action_frame.grid(row=0, column=2, rowspan=3, padx=10, pady=5, sticky="ns")
+        self.entry_cookie = ctk.CTkEntry(login_frame, placeholder_text="Cookie (Auto-filled)", width=200)
+        self.entry_cookie.pack(side="left", padx=5)
 
-        self.btn_login = ctk.CTkButton(btn_action_frame, text="LOGIN CORETAX", command=self.start_login, fg_color="blue", hover_color="darkblue")
-        self.btn_login.pack(expand=True, fill="both", pady=2)
-        
-        ctk.CTkButton(btn_action_frame, text="SIMPAN SESSION", command=self.save_session, fg_color="green").pack(expand=True, fill="both", pady=2)
+        self.entry_tid = ctk.CTkEntry(login_frame, placeholder_text="TID / NPWP16", width=200)
+        self.entry_tid.pack(side="left", padx=5)
 
-        # Excel Inputs
+        # --- INPUT SECTION ---
         input_frame = ctk.CTkFrame(self)
         input_frame.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
         input_frame.grid_columnconfigure(1, weight=1)
         
+        # Row 0: Excel File
         ctk.CTkLabel(input_frame, text="Target Excel:").grid(row=0, column=0, padx=10, pady=10)
         self.entry_file = ctk.CTkEntry(input_frame, placeholder_text="Pilih file monitoring...")
         self.entry_file.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         ctk.CTkButton(input_frame, text="BROWSE", width=100, command=self.browse_file).grid(row=0, column=2, padx=10, pady=10)
 
+        # Row 1: Mode Proses
         ctk.CTkLabel(input_frame, text="MODE PROSES:").grid(row=1, column=0, padx=10, pady=5)
         self.mode_var = ctk.StringVar(value="AUTO-PROCESS (Clear & Fill)")
-        self.mode_menu = ctk.CTkOptionMenu(input_frame, values=["AUTO-PROCESS (Clear & Fill)", "ONLY-CLEAR (Hapus Saja)"], variable=self.mode_var)
+        self.mode_menu = ctk.CTkOptionMenu(input_frame, values=["AUTO-PROCESS (Clear & Fill)", "ONLY-CLEAR (Hapus Saja)", "CHECK-ONLY (Cek PDF Saja)"], variable=self.mode_var)
         self.mode_menu.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+
+        # Row 2: Checkbox Auto-Map
+        self.check_auto_map = ctk.CTkCheckBox(input_frame, text="AUTO-MAPPING (Gunakan Memori Pintar)")
+        self.check_auto_map.select()
+        self.check_auto_map.grid(row=2, column=1, padx=10, pady=10, sticky="w")
+
+        # Row 3: QUICK CHECK (Single Invoice)
+        ctk.CTkLabel(input_frame, text="CEK 1 FAKTUR:").grid(row=3, column=0, padx=10, pady=5)
+        self.entry_single_faktur = ctk.CTkEntry(input_frame, placeholder_text="Masukkan 16/17 digit no faktur...")
+        self.entry_single_faktur.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
+        self.btn_quick_check = ctk.CTkButton(input_frame, text="QUICK CHECK", width=100, command=self.quick_check, fg_color="#cc7a00", text_color="white")
+        self.btn_quick_check.grid(row=3, column=2, padx=10, pady=5)
         
+        # Log Box (Main Window Row 3)
         self.log_box = ctk.CTkTextbox(self, font=("Consolas", 12))
         self.log_box.grid(row=3, column=0, padx=20, pady=10, sticky="nsew")
         
+        # Start Button (Main Window Row 4)
         self.btn_run = ctk.CTkButton(self, text="START PROCESS", height=50, command=self.start_process, font=("Arial", 16, "bold"))
         self.btn_run.grid(row=4, column=0, padx=20, pady=20, sticky="ew")
         
-        # Default values
+        # Default values (Placeholder)
         self.entry_cookie.insert(0, "id-ID")
         self.entry_tid.insert(0, "275bb07a-d021-4389-943e-a740246a56e8")
+
+    def add_log(self, msg):
+        self.log_box.insert("end", msg + "\n")
+        self.log_box.see("end")
+        self.update_idletasks()
+
+    def browse_file(self):
+        f = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
+        if f:
+            self.file_path = f
+            self.entry_file.delete(0, "end")
+            self.entry_file.insert(0, f)
+
+    def load_mapping_history(self):
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, 'r') as f:
+                    return json.load(f)
+            except: return {}
+        return {}
+
+    def save_mapping_history(self, new_mapping):
+        history = self.load_mapping_history()
+        history.update(new_mapping)
+        with open(self.history_file, 'w') as f:
+            json.dump(history, f, indent=4)
+
+    def _get_smart_cat(self, item_name, categories):
+        history = self.load_mapping_history()
+        if item_name in history:
+            return history[item_name]
+        
+        # Conservative heuristic: Only auto-match core items
+        name_up = item_name.upper()
+        if "PUPUK" in name_up:
+            target = next((c for c in categories if "PUPUK" in c.upper()), None)
+            if target: return target
+            
+        return "Abaikan"
 
     def start_login(self):
         self.btn_login.configure(state="disabled", text="BROWSER OPEN...")
@@ -140,81 +177,48 @@ class CoreTaxApp(ctk.CTk):
         self.add_log("[*] Membuka browser untuk login...")
         try:
             with sync_playwright() as p:
-                # Tambahkan user agent asli agar tidak diblokir
                 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
                 browser = p.chromium.launch(headless=False)
                 context = browser.new_context(user_agent=user_agent)
                 page = context.new_page()
                 
                 found_token = False
-                
                 def handle_request(request):
                     nonlocal found_token
-                    auth = request.headers.get("authorization")
-                    if auth and "Bearer" in auth and len(auth) > 200:
-                        token_val = auth.replace("Bearer ", "")
-                        self.token = token_val
-                        self.after(0, lambda: self.entry_token.delete(0, "end"))
-                        self.after(0, lambda: self.entry_token.insert(0, token_val))
-                        if not found_token:
-                            self.add_log("[√] SESSION DITANGKAP!")
-                            found_token = True
+                    # Cek semua header secara case-insensitive
+                    headers = {k.lower(): v for k, v in request.headers.items()}
+                    auth = headers.get("authorization")
+                    
+                    if auth and "Bearer" in auth and not found_token:
+                        token = auth.replace("Bearer ", "").strip()
+                        self.entry_token.delete(0, "end")
+                        self.entry_token.insert(0, token)
+                        
+                        cookies = context.cookies()
+                        cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+                        self.entry_cookie.delete(0, "end")
+                        self.entry_cookie.insert(0, cookie_str)
+                        
+                        self.add_log("[√] Sesi ditangkap secara otomatis!")
+                        found_token = True
 
                 page.on("request", handle_request)
+                page.on("close", lambda: self.btn_login.configure(state="normal", text="LOGIN CORETAX"))
                 
-                # Gunakan URL Login yang Anda berikan
-                self.add_log("[*] Membuka halaman login...")
-                page.goto("https://coretaxdjp.pajak.go.id/identityproviderportal/Account/Login", wait_until="domcontentloaded", timeout=60000)
+                # Gunakan portal utama agar redirect terbaca sempurna
+                page.goto("https://coretaxdjp.pajak.go.id/identityproviderportal/Account/Login")
+                self.add_log("[*] Silakan masukkan username & password di browser...")
                 
                 while True:
-                    if not browser.is_connected(): break
-                    
-                    # Capture Cookies
-                    cookies = context.cookies()
-                    cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
-                    if "sl-session" in cookie_str:
-                        self.cookie = cookie_str
-                        self.after(0, lambda: self.entry_cookie.delete(0, "end"))
-                        self.after(0, lambda: self.entry_cookie.insert(0, self.cookie))
-                    
-                    # Extract TID from token
-                    if hasattr(self, 'token') and self.token:
-                        try:
-                            payload_b64 = self.token.split('.')[1]
-                            missing_padding = len(payload_b64) % 4
-                            if missing_padding: payload_b64 += '=' * (4 - missing_padding)
-                            payload = json.loads(base64.b64decode(payload_b64).decode('utf-8'))
-                            tid = payload.get("taxpayer_id")
-                            if tid:
-                                self.tid = tid
-                                self.after(0, lambda: self.entry_tid.delete(0, "end"))
-                                self.after(0, lambda: self.entry_tid.insert(0, tid))
-                        except: pass
-                    
                     time.sleep(1)
+                    if not browser.is_connected(): break
+                    if found_token:
+                        # Tetap biarkan browser terbuka sebentar agar user bisa melihat dashboard
+                        time.sleep(2)
+                        break
         except Exception as e:
-            self.add_log(f"[!] Browser Error: {e}")
-        finally:
-            self.after(0, lambda: self.btn_login.configure(state="normal", text="LOGIN CORETAX"))
-            self.add_log("[*] Browser ditutup.")
-
-    def save_session(self):
-        self.token = self.entry_token.get()
-        self.cookie = self.entry_cookie.get()
-        self.tid = self.entry_tid.get()
-        self.add_log("[√] SESSION DIPERBARUI & DISIMPAN!")
-
-    def add_log(self, msg):
-        self.log_box.insert("end", f"{time.strftime('%H:%M:%S')} | {msg}\n")
-        self.log_box.see("end")
-
-    def browse_file(self):
-        from tkinter import filedialog
-        path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
-        if path:
-            self.file_path = path
-            self.entry_file.delete(0, "end")
-            self.entry_file.insert(0, path)
+            self.add_log(f"[!] Browser Error: {str(e)}")
+            self.btn_login.configure(state="normal", text="LOGIN CORETAX")
 
     def auto_detect_header(self, file_path, sheet_name='PM'):
         try:
@@ -226,193 +230,53 @@ class CoreTaxApp(ctk.CTk):
             return 0
         except: return 0
 
-    def _get_col_idx(self, ws, name):
+    def _get_col_idx(self, ws, name_part):
         for cell in ws[1]:
-            if name.upper() in str(cell.value).upper():
+            if name_part.upper() in str(cell.value).upper():
                 return cell.column
         return None
 
-    def start_process(self):
-        if not self.file_path:
-            self.add_log("[!] Pilih file Excel dulu.")
-            return
-        self.btn_run.configure(state="disabled", text="PROCESSING...")
-        threading.Thread(target=self.run_logic, daemon=True).start()
-
-    def run_logic(self):
+    def _fetch_pdf_items(self, faktur, tid, expected_total):
+        if not hasattr(self, 'session'): self.session = requests.Session()
+        
+        list_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/inputinvoice/list"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Cookie": self.cookie,
+            "Content-Type": "application/json",
+            "x-dgt-code": "7AcAAA=="
+        }
+        search_payload = {
+            "BuyerTaxpayerAggregateIdentifier": tid, "TaxpayerAggregateIdentifier": tid,
+            "First": 0, "Rows": 1, "LanguageId": "id-ID",
+            "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": faktur, "MatchMode": "equals"}]
+        }
+        
         try:
-            self.add_log(f"[+] File Load: {os.path.basename(self.file_path)}")
-            tid = self.tid if hasattr(self, 'tid') and self.tid else self.entry_tid.get()
+            time.sleep(0.4)
+            resp = self.session.post(list_url, json=search_payload, headers=headers, timeout=15)
+            if resp.status_code == 401: return None, "401 Sesi Habis"
+            if resp.status_code != 200: return None, f"HTTP {resp.status_code}"
             
-            # PHASE 0: DETEKSI STRUKTUR
-            self.add_log("[*] Tahap 0: Mendeteksi struktur Excel secara dinamis...")
-            h_idx = self.auto_detect_header(self.file_path)
-            df = pd.read_excel(self.file_path, sheet_name='PM', header=h_idx)
-            headers = df.columns.tolist()
+            items_list = resp.json().get("Payload", {}).get("Data", [])
+            if not items_list: return None, "Faktur tidak ditemukan"
             
-            # Deteksi Kategori secara Dinamis
-            self.dynamic_categories = {} # {Kategori: (Index_Harga, Index_QTY)}
-            blacklist = ["NPWP", "NAMA", "NOMOR FAKTUR", "TANGGAL", "MASA", "TAHUN",
-                         "STATUS", "NO. INV", "HARGA JUAL", "DPP", "PPN", "KET",
-                         "JUMLAH PENJABARAN", "SELISIH", "QTY"]
+            inv = items_list[0]
+            detail_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/DownloadInvoice/download-invoice-document"
+            detail_payload = {
+                "EInvoiceRecordIdentifier": inv["RecordId"],
+                "EInvoiceAggregateIdentifier": inv["AggregateIdentifier"],
+                "DocumentAggregateIdentifier": inv["DocumentFormAggregateIdentifier"],
+                "TaxpayerAggregateIdentifier": tid,
+                "LetterNumber": faktur,
+                "EInvoiceMenuType": "Input",
+                "TaxInvoiceStatus": "APPROVED"
+            }
+            d_resp = self.session.post(detail_url, json=detail_payload, headers=headers)
+            pdf_b64 = d_resp.json().get("Content")
+            if not pdf_b64: return None, "Konten PDF kosong"
             
-            for i, col in enumerate(headers):
-                col_str = str(col).strip().upper()
-                if "QTY" in col_str:
-                    if i + 1 < len(headers):
-                        cat_name = str(headers[i+1]).strip()
-                        is_blacklisted = any(b in cat_name.upper() for b in blacklist)
-                        if not is_blacklisted:
-                            self.dynamic_categories[cat_name] = (i+2, i+1)
-            
-            self.add_log(f"[+] Kategori terdeteksi: {', '.join(self.dynamic_categories.keys())}")
-            
-            c_faktur = next((c for c in headers if "Nomor Faktur" in str(c)), None)
-            c_harga  = next((c for c in headers if "Harga Jual" in str(c)), None)
-            c_selisih = next((c for c in headers if "Selisih" in str(c)), None)
-            
-            # Filter baris: (Kosong) OR (Salah Hitung) OR (Data Tipe Teks/Junk)
-            def should_process(r):
-                # 1. CEK SAMPAH DI SELURUH KOLOM (Sangat Agresif)
-                # Jika ada angka 310000/320000 di mana pun dalam baris ini, HARUS DIHAPUS
-                for val in r:
-                    if isinstance(val, (int, float)) and val in [310000, 320000, 31000, 32000]:
-                        return True
-                    if isinstance(val, str) and str(val).strip() in ["310000", "320000", "310,000", "320,000"]:
-                        return True
-                
-                # 2. CEK LOGIKA NORMAL (Hanya jika tidak ada sampah)
-                if pd.isna(r[c_faktur]): return False
-                hj = pd.to_numeric(r[c_harga], errors='coerce')
-                if pd.isna(hj) or hj <= 0: return False
-                
-                current_sum = 0
-                for cat in self.dynamic_categories.keys():
-                    val = pd.to_numeric(r[cat], errors='coerce')
-                    if not pd.isna(val): current_sum += val
-                
-                selisih_val = r[c_selisih]
-                is_reconciled = False
-                if not pd.isna(selisih_val):
-                    try:
-                        clean_diff = abs(float(str(selisih_val).replace(',','')))
-                        if clean_diff < 100: is_reconciled = True
-                    except:
-                        if str(selisih_val).strip() == '-': is_reconciled = True
-                
-                if current_sum == 0: return True
-                if not pd.isna(selisih_val) and (not is_reconciled): return True
-                return False
-            
-            targets = df[df.apply(should_process, axis=1)].copy()
-            targets['excel_row'] = targets.index + h_idx + 2
-            self.add_log(f"[+] Ditemukan {len(targets)} faktur untuk diproses.")
-            
-            if len(targets) == 0:
-                self.add_log("[!] Tidak ada faktur yang perlu diproses. Selesai.")
-                self.btn_run.configure(state="normal", text="START AUTO-CHECK")
-                return
-
-            # TAHAP 1: HAPUS SEMUA TARGET DI EXCEL DULU (Sesuai Instruksi User)
-            self.add_log(f"[*] Tahap 1: Membersihkan {len(targets)} baris di Excel & Saving...")
-            wb_clear = openpyxl.load_workbook(self.file_path)
-            ws_clear = wb_clear["PM"]
-            for _, row in targets.iterrows():
-                ex_row = int(row['excel_row'])
-                self.add_log(f"    - Menghapus Baris {ex_row}...")
-                for cat_name, (p_idx, q_idx) in self.dynamic_categories.items():
-                    ws_clear.cell(row=ex_row, column=p_idx).value = None
-                    ws_clear.cell(row=ex_row, column=q_idx).value = None
-            wb_clear.save(self.file_path)
-            self.add_log("[√] Seluruh baris target sudah BERSIH & file tersimpan.")
-
-            # CEK MODE: Jika hanya hapus, maka stop di sini
-            if self.mode_var.get() == "ONLY-CLEAR (Hapus Saja)":
-                self.add_log("[√] MODE ONLY-CLEAR SELESAI. Silakan cek file Excel Anda.")
-                self.btn_run.configure(state="normal", text="START PROCESS")
-                return
-
-            # TAHAP 2: MENGAMBIL DATA DARI PDF
-            all_invoice_items = {} # {excel_row: [items]}
-            unique_names = set()
-            
-            self.add_log("[*] Tahap 2: Menscan PDF untuk mencari isi faktur...")
-            for index, row in targets.iterrows():
-                raw_f = row[c_faktur]
-                expected_total = pd.to_numeric(row[c_harga], errors='coerce')
-                ex_row = int(row['excel_row'])
-                faktur = "{:.0f}".format(raw_f).zfill(17) if isinstance(raw_f, (float, int)) else str(raw_f).zfill(17)
-                
-                self.add_log(f"    - Scanning PDF (Baris {ex_row}): {faktur}")
-                items = self._fetch_pdf_items(faktur, tid, expected_total)
-                if items:
-                    all_invoice_items[ex_row] = items
-                    for it in items: unique_names.add(it['name'])
-                else:
-                    self.add_log("      [!] Gagal/Tidak cocok.")
-
-            if not all_invoice_items:
-                self.add_log("[!] Scan selesai, namun tidak ada data PDF yang cocok untuk diisi.")
-                self.btn_run.configure(state="normal", text="START AUTO-CHECK")
-                return
-
-            # TAHAP 3: MAPPING
-            mapping_window = MappingWindow(self, list(unique_names), list(self.dynamic_categories.keys()))
-            self.wait_window(mapping_window)
-            final_mapping = mapping_window.result
-            if not final_mapping:
-                self.add_log("[!] Mapping dibatalkan.")
-                self.btn_run.configure(state="normal", text="START AUTO-CHECK")
-                return
-
-            # TAHAP 4: ISI DATA VALID KE EXCEL
-            self.add_log("[*] Tahap 4: Mengisi data baru & Final Saving...")
-            wb = openpyxl.load_workbook(self.file_path)
-            ws = wb["PM"]
-            success_count = 0
-            for target_row, items in all_invoice_items.items():
-                self.add_log(f"   -> Menulis ke baris {target_row}...")
-                for it in items:
-                    cat = final_mapping.get(it['name'])
-                    if cat and cat in self.dynamic_categories:
-                        p_idx, q_idx = self.dynamic_categories[cat]
-                        ws.cell(row=target_row, column=p_idx).value = it['total']
-                        ws.cell(row=target_row, column=p_idx).number_format = '#,##0'
-                        ws.cell(row=target_row, column=q_idx).value = it['qty']
-                        ws.cell(row=target_row, column=q_idx).number_format = '#,##0.00'
-                        self.add_log(f"      [√] {cat}: Harga={it['total']:,}, QTY={it['qty']}")
-                
-                diff_idx = self._get_col_idx(ws, "Selisih")
-                if diff_idx: ws.cell(row=target_row, column=diff_idx).value = "-"
-                success_count += 1
-            
-            wb.save(self.file_path)
-            self.add_log(f"[√] SELESAI: {success_count} faktur berhasil diperbarui.")
-            self.btn_run.configure(state="normal", text="START AUTO-CHECK")
-            
-            wb.save(self.file_path)
-            self.add_log(f"[√] BERHASIL: {success_count} faktur diupdate.")
-            self.btn_run.configure(state="normal", text="START AUTO-CHECK")
-            
-        except Exception as e:
-            self.add_log(f"[!] ERROR: {str(e)}")
-            self.btn_run.configure(state="normal", text="START AUTO-CHECK")
-
-    def _fetch_pdf_items(self, no_faktur, tid, expected_total):
-        time.sleep(1.2)
-        headers = {"authority": "coretaxdjp.pajak.go.id", "authorization": f"Bearer {self.token}", "content-type": "application/json", "cookie": self.cookie, "x-dgt-code": "7AcAAA=="}
-        try:
-            s_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/inputinvoice/list"
-            payload = {"BuyerTaxpayerAggregateIdentifier": tid, "TaxpayerAggregateIdentifier": tid, "First": 0, "Rows": 1, "LanguageId": "id-ID", "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": no_faktur, "MatchMode": "equals"}]}
-            resp = requests.post(s_url, headers=headers, json=payload).json()
-            data = resp.get("Payload", {}).get("Data", [])
-            if not data: return None
-            inv = data[0]
-            d_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/DownloadInvoice/download-invoice-document"
-            d_payload = {"EInvoiceRecordIdentifier": inv["RecordId"], "EInvoiceAggregateIdentifier": inv["AggregateIdentifier"], "DocumentAggregateIdentifier": inv["DocumentFormAggregateIdentifier"], "TaxpayerAggregateIdentifier": tid, "LetterNumber": no_faktur, "EInvoiceMenuType": "Input", "TaxInvoiceStatus": "APPROVED"}
-            d_resp = requests.post(d_url, headers=headers, json=d_payload).json()
-            pdf_bytes = base64.b64decode(d_resp["Content"])
-            
+            pdf_bytes = base64.b64decode(pdf_b64)
             extracted_items = []
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page in pdf.pages:
@@ -421,39 +285,158 @@ class CoreTaxApp(ctk.CTk):
                     for row in table:
                         if not row or len(row) < 3: continue
                         row_text = " ".join([str(c) if c is not None else "" for c in row])
-                        all_nums_raw = re.findall(r'[\d.]+(?:,[\d]+)?', row_text)
+                        nums = re.findall(r'[\d.]+(?:,[\d]+)?', row_text)
                         parsed_nums = []
-                        for n in all_nums_raw:
+                        for n in nums:
                             clean_n = n.replace('.', '').replace(',', '.')
                             try:
                                 val = float(clean_n)
                                 if val > 0: parsed_nums.append(val)
                             except: pass
+                        
                         if not parsed_nums: continue
-                        found_total = next((n for n in parsed_nums if abs(n - expected_total) < 100), None)
-                        if found_total:
-                            qty = None
-                            for n in parsed_nums:
-                                if n == found_total: continue
-                                for m in parsed_nums:
-                                    if m == found_total: continue
-                                    if abs(n * m - found_total) < (0.01 * found_total):
-                                        qty = min(n, m)
-                                        break
-                                if qty: break
-                            if qty is None:
-                                q_match = re.search(r'x\s+([\d.,]+)', row_text)
-                                if q_match:
-                                    qs = q_match.group(1).replace('.', '').replace(',', '.')
-                                    qty = float(qs)
-                            if qty:
+                        for n in parsed_nums:
+                            # If Quick Check (expected=0), we collect all likely price lines
+                            # If Normal Process, we match only specific line
+                            if expected_total == 0 or abs(n - expected_total) < 100:
+                                qty = 1.0
+                                for q_cand in parsed_nums:
+                                    if q_cand != n and q_cand < 1000000: qty = q_cand; break
                                 cells = [str(c) if c is not None else "" for c in row]
                                 raw_name = max(cells, key=len).strip()
                                 name = re.split(r'Rp|\sx\s|\n', raw_name)[0].strip()
-                                extracted_items.append({"name": name, "qty": qty, "total": found_total})
-                                return extracted_items
-            return None
-        except: return None
+                                extracted_items.append({"name": name, "qty": qty, "total": n})
+                                if expected_total > 0: return extracted_items, "Success"
+            
+            if expected_total == 0 and extracted_items: return extracted_items, "Success"
+            return None, "Item tidak ditemukan di PDF"
+        except Exception as e: return None, str(e)
+
+    def quick_check(self):
+        faktur = self.entry_single_faktur.get().strip()
+        if not faktur: return self.add_log("[!] Masukkan nomor faktur.")
+        self.token = self.entry_token.get().strip()
+        self.cookie = self.entry_cookie.get().strip()
+        tid = self.entry_tid.get().strip()
+        if not self.token or not self.cookie: return self.add_log("[!] Silakan Login dulu.")
+
+        def run():
+            self.add_log(f"\n[QUICK CHECK] Faktur: {faktur}")
+            items, msg = self._fetch_pdf_items(faktur, tid, 0)
+            if items:
+                self.add_log("--- [ITEM TERDETEKSI] ---")
+                for it in items:
+                    self.add_log(f" > {it['name']} | QTY: {it['qty']} | Harga: {it['total']:,}")
+                self.add_log("-------------------------")
+            else:
+                self.add_log(f"[!] Gagal: {msg}")
+        threading.Thread(target=run, daemon=True).start()
+
+    def start_process(self):
+        if not self.file_path: return self.add_log("[!] Pilih file Excel.")
+        self.btn_run.configure(state="disabled", text="PROCESSING...")
+        threading.Thread(target=self.run_logic, daemon=True).start()
+
+    def run_logic(self):
+        try:
+            self.token = self.entry_token.get().strip()
+            self.cookie = self.entry_cookie.get().strip()
+            tid = self.entry_tid.get().strip()
+            
+            self.add_log(f"[+] File: {os.path.basename(self.file_path)}")
+            h_idx = self.auto_detect_header(self.file_path)
+            df = pd.read_excel(self.file_path, sheet_name='PM', header=h_idx)
+            headers = df.columns.tolist()
+            
+            # Identify columns by index (Robust)
+            c_faktur_idx = next((i for i, c in enumerate(headers) if "Nomor Faktur" in str(c)), None)
+            c_harga_idx = next((i for i, c in enumerate(headers) if "Harga Jual" in str(c)), None)
+            c_selisih_idx = next((i for i, c in enumerate(headers) if "Selisih" in str(c)), None)
+            
+            self.dynamic_categories = {}
+            for i, col in enumerate(headers):
+                if "QTY" in str(col).upper() and i+1 < len(headers):
+                    cat_name = str(headers[i+1]).strip()
+                    if not any(b in cat_name.upper() for b in ["NPWP", "DPP", "PPN", "QTY"]):
+                        # (Col_Price_Excel, Col_QTY_Excel, Pandas_Col_Index)
+                        self.dynamic_categories[cat_name] = (i+2, i+1, i+1)
+            
+            def should_process(r):
+                for val in r:
+                    if isinstance(val, (int, float)) and val in [310000, 320000, 31000, 32000]: return True
+                if pd.isna(r.iloc[c_faktur_idx]): return False
+                hj = pd.to_numeric(r.iloc[c_harga_idx], errors='coerce')
+                if pd.isna(hj) or hj <= 0: return False
+                
+                cur_sum = 0
+                for cat, (p, q, idx) in self.dynamic_categories.items():
+                    val = pd.to_numeric(r.iloc[idx], errors='coerce')
+                    if not pd.isna(val): cur_sum += val
+                
+                selisih = r.iloc[c_selisih_idx]
+                if pd.isna(selisih) or cur_sum == 0: return True
+                return False
+
+            targets = df[df.apply(should_process, axis=1)].copy()
+            targets['excel_row'] = targets.index + h_idx + 2
+            self.add_log(f"[*] Ditemukan {len(targets)} faktur.")
+            
+            wb = openpyxl.load_workbook(self.file_path)
+            ws = wb["PM"]
+            
+            # WIPE
+            for _, row in targets.iterrows():
+                ex_r = int(row['excel_row'])
+                for cat, (p, q, idx) in self.dynamic_categories.items():
+                    ws.cell(row=ex_r, column=p).value = None
+                    ws.cell(row=ex_r, column=q).value = None
+            
+            if self.mode_var.get() == "ONLY-CLEAR (Hapus Saja)":
+                wb.save(self.file_path); return self.add_log("[√] Clear Selesai.")
+
+            # SCAN PDF
+            all_items = {}; unique_names = set()
+            for _, row in targets.iterrows():
+                f = "{:.0f}".format(row.iloc[c_faktur_idx]).zfill(17) if isinstance(row.iloc[c_faktur_idx], (float, int)) else str(row.iloc[c_faktur_idx]).zfill(17)
+                hj = pd.to_numeric(row.iloc[c_harga_idx], errors='coerce')
+                self.add_log(f" > Scan: {f}")
+                items, msg = self._fetch_pdf_items(f, tid, hj)
+                if items:
+                    all_items[int(row['excel_row'])] = items
+                    for it in items: unique_names.add(it['name'])
+                else: self.add_log(f"   [!] Gagal: {msg}")
+
+            if not all_items: return self.add_log("[!] Tidak ada data PDF.")
+
+            # MAPPING
+            final_mapping = {}; unmapped = []
+            for name in unique_names:
+                guessed = self._get_smart_cat(name, list(self.dynamic_categories.keys()))
+                if guessed != "Abaikan": final_mapping[name] = guessed
+                else: unmapped.append(name)
+            
+            if not self.check_auto_map.get() or unmapped:
+                win = MappingWindow(self, list(unique_names), list(self.dynamic_categories.keys()), final_mapping)
+                self.wait_window(win)
+                final_mapping = win.result
+                if final_mapping: self.save_mapping_history(final_mapping)
+
+            if not final_mapping: return self.add_log("[!] Mapping batal.")
+
+            # FILL
+            for r_idx, items in all_items.items():
+                for it in items:
+                    cat = final_mapping.get(it['name'])
+                    if cat and cat in self.dynamic_categories:
+                        p, q, idx = self.dynamic_categories[cat]
+                        ws.cell(row=r_idx, column=p).value = it['total']
+                        ws.cell(row=r_idx, column=q).value = it['qty']
+                if c_selisih_idx: ws.cell(row=r_idx, column=c_selisih_idx+1).value = "-"
+            
+            wb.save(self.file_path)
+            self.add_log("[√] SELESAI.")
+        except Exception as e: self.add_log(f"[!] Error: {str(e)}")
+        finally: self.btn_run.configure(state="normal", text="START PROCESS")
 
 if __name__ == "__main__":
     app = CoreTaxApp()
