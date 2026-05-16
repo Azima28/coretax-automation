@@ -438,31 +438,49 @@ class CoreTaxApp(ctk.CTk):
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
             
-            # Filter baris: (Kosong) OR (Belum Dikerjakan)
             def should_process(r):
+                # 1. CEK APAKAH BARIS INI BENAR-BENAR "KOSONG" DI MATA USER
+                # Kita cek Jumlah Penjabaran (AW) dan Selisih (AX)
+                # Jika ada angkanya, berarti sudah dikerjakan (Skip)
                 
-                # 2. CEK LOGIKA NORMAL (Hanya jika tidak ada sampah)
+                # Gunakan r.get('Jumlah Penjabaran') jika tersedia dari pandas
+                # Tapi lebih aman cek sum categories dulu
+                
                 if pd.isna(r[c_faktur]): return False
                 hj = pd.to_numeric(r[c_harga], errors='coerce')
                 if pd.isna(hj) or hj <= 0: return False
                 
+                # Cek apakah ada satu saja kategori yang sudah terisi
                 current_sum = 0
+                has_any_entry = False
                 for cat in self.dynamic_categories.keys():
                     if cat in r:
                         val = pd.to_numeric(r[cat], errors='coerce')
-                        if not pd.isna(val): current_sum += val
+                        if not pd.isna(val) and val != 0:
+                            current_sum += val
+                            has_any_entry = True
                 
-                selisih_val = r[c_selisih] if (c_selisih and c_selisih in r) else None
+                # Cek kolom 'Jumlah Penjabaran' secara langsung (antisipasi formula belum hitung)
+                c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
+                val_penjabaran = pd.to_numeric(r[c_penjabaran], errors='coerce') if c_penjabaran else 0
+                
+                if not pd.isna(val_penjabaran) and val_penjabaran != 0:
+                    has_any_entry = True
+                    current_sum = val_penjabaran
+
+                selisih_val = pd.to_numeric(r[c_selisih], errors='coerce') if (c_selisih and c_selisih in r) else None
+                
+                # Logika: Jika sudah ada isinya (has_any_entry) 
+                # DAN selisihnya kecil (reconciled), maka SKIP.
                 is_reconciled = False
-                if not pd.isna(selisih_val):
-                    try:
-                        clean_diff = abs(float(str(selisih_val).replace(',','')))
-                        if clean_diff < 100: is_reconciled = True
-                    except:
-                        if str(selisih_val).strip() == '-': is_reconciled = True
+                if not pd.isna(selisih_val) and abs(selisih_val) < 100:
+                    is_reconciled = True
                 
-                if current_sum == 0: return True
-                if not pd.isna(selisih_val) and (not is_reconciled): return True
+                # Jika benar-benar kosong, baru proses
+                if not has_any_entry: return True
+                # Jika ada isi tapi belum balance, proses (tapi nanti kita jangan hapus manual)
+                if not is_reconciled: return True
+                
                 return False
             
             targets = df[df.apply(should_process, axis=1)].copy()
