@@ -56,34 +56,52 @@ class MappingWindow(ctk.CTkToplevel):
         self.btn_save.grid(row=2, column=0, padx=20, pady=20)
 
     def auto_map(self):
-        # Logika Fuzzy Matching
+        # Noise words yang sering ada di faktur dan bikin kotor
+        noise = ["MATERIAL", "SEBANYAK", "METER", "KUBIK", "UNIT", "PCS", "KG", "LITER", "LT", "SAK", "ZAK", "M3", "BANYAKNYA", "JASA", "PADA"]
+        
         for name, var in self.combo_vars.items():
-            real_cats = self.categories[1:]
-            # 1. Cek exact match atau sangat mirip
-            matches = difflib.get_close_matches(name.upper(), [c.upper() for c in real_cats], n=1, cutoff=0.5)
+            real_cats = self.categories[1:] # Lewati "Abaikan"
+            u_name = name.upper()
             
-            if matches:
-                idx = [c.upper() for c in real_cats].index(matches[0])
-                var.set(real_cats[idx])
-            else:
-                # 2. Cek apakah ada kata dari Kategori yang muncul di Nama Barang
-                found = False
-                for cat in real_cats:
-                    if cat.upper() in name.upper() or name.upper() in cat.upper():
-                        var.set(cat)
-                        found = True
-                        break
+            # 1. Bersihkan Nama Barang dari angka dan noise
+            clean_name = re.sub(r'[\d.,]+', '', u_name) # Hapus angka
+            for n in noise:
+                clean_name = clean_name.replace(n, "")
+            
+            name_words = set(re.findall(r'\w+', clean_name))
+            
+            best_cat = "Abaikan"
+            max_score = 0
+            
+            for cat in real_cats:
+                u_cat = cat.upper()
+                cat_words = set(re.findall(r'\w+', u_cat))
                 
-                if not found:
-                    # 3. Ratio SequenceMatcher
-                    best_match = "Abaikan"
-                    best_score = 0
-                    for cat in real_cats:
-                        score = difflib.SequenceMatcher(None, cat.upper(), name.upper()).ratio()
-                        if score > best_score and score > 0.3:
-                            best_score = score
-                            best_match = cat
-                    var.set(best_match)
+                # A. Logika Exact Word Match (Sangat Kuat)
+                # Jika ada kata di kategori yang muncul persis di nama barang
+                intersection = name_words.intersection(cat_words)
+                if intersection:
+                    # Makin banyak kata yang cocok, makin bagus
+                    score = len(intersection) / len(cat_words)
+                    if score > max_score:
+                        max_score = score
+                        best_cat = cat
+                
+                # B. Logika Substring Match
+                elif u_cat in u_name or u_name in u_cat:
+                    score = 0.8
+                    if score > max_score:
+                        max_score = score
+                        best_cat = cat
+
+            # C. Fuzzy Match sebagai cadangan terakhir (Threshold Tinggi)
+            if best_cat == "Abaikan":
+                matches = difflib.get_close_matches(u_name, [c.upper() for c in real_cats], n=1, cutoff=0.7)
+                if matches:
+                    idx = [c.upper() for c in real_cats].index(matches[0])
+                    best_cat = real_cats[idx]
+
+            var.set(best_cat)
 
     def save_mapping(self):
         for name, var in self.combo_vars.items():
