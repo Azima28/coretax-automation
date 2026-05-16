@@ -1,3 +1,4 @@
+import difflib
 import tkinter as tk
 import customtkinter as ctk
 import pandas as pd
@@ -17,41 +18,76 @@ class MappingWindow(ctk.CTkToplevel):
     def __init__(self, parent, unique_names, categories):
         super().__init__(parent)
         self.title("Batch Mapping: Tentukan Kategori Barang")
-        self.geometry("600x500")
+        self.geometry("750x650")
         self.result = {}
         self.unique_names = unique_names
         self.categories = ["Abaikan"] + categories
+        self.combo_vars = {}
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         
-        label = ctk.CTkLabel(self, text="Ditemukan beberapa jenis barang baru.\nSilakan tentukan kolom Excel untuk setiap nama barang:", font=("Arial", 14, "bold"))
-        label.grid(row=0, column=0, pady=20, padx=20)
+        # Header & Tombol Cerdas
+        header_frame = ctk.CTkFrame(self)
+        header_frame.grid(row=0, column=0, padx=20, pady=10, sticky="ew")
         
+        ctk.CTkLabel(header_frame, text="Ditemukan beberapa jenis barang baru.\nSilakan tentukan kolom Excel untuk setiap nama barang:", font=("Arial", 12, "bold")).pack(side="left", padx=10)
+        
+        self.btn_auto = ctk.CTkButton(header_frame, text="AUTO-MAP (SMART)", fg_color="#E67E22", hover_color="#D35400", command=self.auto_map)
+        self.btn_auto.pack(side="right", padx=10)
+
+        # Scrollable area
         self.scroll_frame = ctk.CTkScrollableFrame(self)
-        self.scroll_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=10)
-        self.scroll_frame.grid_columnconfigure(1, weight=1)
-        
-        self.combos = {}
-        for i, name in enumerate(unique_names):
-            lbl = ctk.CTkLabel(self.scroll_frame, text=f"Nama : {name}", anchor="w")
-            lbl.grid(row=i, column=0, padx=10, pady=10, sticky="w")
+        self.scroll_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
+        self.scroll_frame.grid_columnconfigure(0, weight=1)
+
+        for i, name in enumerate(self.unique_names):
+            row_f = ctk.CTkFrame(self.scroll_frame)
+            row_f.grid(row=i, column=0, padx=5, pady=5, sticky="ew")
             
-            combo = ctk.CTkComboBox(self.scroll_frame, values=self.categories, width=250)
-            combo.set("Abaikan")
-            combo.grid(row=i, column=1, padx=10, pady=10, sticky="e")
-            self.combos[name] = combo
+            ctk.CTkLabel(row_f, text=f"Nama : {name}", wraplength=450, justify="left").pack(side="left", padx=10)
             
-        btn_save = ctk.CTkButton(self, text="SIMPAN & PROSES SEMUA", command=self.on_save, fg_color="green", hover_color="darkgreen", height=40, font=("Arial", 14, "bold"))
-        btn_save.grid(row=2, column=0, pady=20)
-        
-        self.grab_set()
-        
-    def on_save(self):
-        for name, combo in self.combos.items():
-            val = combo.get()
-            if val != "Abaikan":
-                self.result[name] = val
+            var = ctk.StringVar(value="Abaikan")
+            combo = ctk.CTkComboBox(row_f, values=self.categories, variable=var, width=200)
+            combo.pack(side="right", padx=10)
+            self.combo_vars[name] = var
+
+        self.btn_save = ctk.CTkButton(self, text="SIMPAN & PROSES SEMUA", fg_color="#27AE60", hover_color="#219150", command=self.save_mapping)
+        self.btn_save.grid(row=2, column=0, padx=20, pady=20)
+
+    def auto_map(self):
+        # Logika Fuzzy Matching
+        for name, var in self.combo_vars.items():
+            real_cats = self.categories[1:]
+            # 1. Cek exact match atau sangat mirip
+            matches = difflib.get_close_matches(name.upper(), [c.upper() for c in real_cats], n=1, cutoff=0.5)
+            
+            if matches:
+                idx = [c.upper() for c in real_cats].index(matches[0])
+                var.set(real_cats[idx])
+            else:
+                # 2. Cek apakah ada kata dari Kategori yang muncul di Nama Barang
+                found = False
+                for cat in real_cats:
+                    if cat.upper() in name.upper() or name.upper() in cat.upper():
+                        var.set(cat)
+                        found = True
+                        break
+                
+                if not found:
+                    # 3. Ratio SequenceMatcher
+                    best_match = "Abaikan"
+                    best_score = 0
+                    for cat in real_cats:
+                        score = difflib.SequenceMatcher(None, cat.upper(), name.upper()).ratio()
+                        if score > best_score and score > 0.3:
+                            best_score = score
+                            best_match = cat
+                    var.set(best_match)
+
+    def save_mapping(self):
+        for name, var in self.combo_vars.items():
+            self.result[name] = var.get()
         self.destroy()
 
 class CoreTaxApp(ctk.CTk):
