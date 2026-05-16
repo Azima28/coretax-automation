@@ -440,68 +440,60 @@ class CoreTaxApp(ctk.CTk):
             
             c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
 
-            def is_cell_empty(val):
+            def is_not_positive(val):
                 if val is None: return True
                 s_val = str(val).strip()
                 if s_val == "" or s_val == "0" or s_val == "0.0": return True
+                # Jika diawali '=' berarti RUMUS, kita anggap "Belum Ada Isinya" 
+                # (nanti akan dicek lebih lanjut via has_any_real_entry)
+                if s_val.startswith("="): return True
+                try:
+                    f_val = float(s_val.replace(',',''))
+                    if f_val <= 0: return True
+                except: pass
                 return False
 
             def should_process(r):
                 if pd.isna(r[c_faktur]): return False
                 
                 # 1. Cek Kategori Secara Mendalam
-                # Kita cek satu-satu kolom kategori (Semen, BBM, dll)
-                current_sum = 0
+                # Kita cek apakah ada satu saja kategori yang isinya BUKAN 0 dan BUKAN rumus
                 has_any_real_entry = False
                 for cat in self.dynamic_categories.keys():
                     if cat in r:
                         val = r[cat]
-                        # Jika isinya bukan kosong dan bukan rumus, berarti ada angka manual
-                        if not is_cell_empty(val):
-                            if not str(val).startswith("="):
+                        if val is not None:
+                            s_v = str(val).strip()
+                            if s_v != "" and s_v != "0" and s_v != "0.0" and not s_v.startswith("="):
                                 try:
-                                    f_val = float(str(val).replace(',',''))
-                                    if f_val != 0: 
-                                        current_sum += f_val
+                                    if float(s_v.replace(',','')) != 0:
                                         has_any_real_entry = True
+                                        break
                                 except: pass
-                            else:
-                                # Jika isinya RUMUS di kolom kategori (jarang terjadi tapi mungkin)
-                                pass 
-                
-                # 2. Cek Kolom Penjabaran (AW)
+
+                # 2. ATURAN EMAS: Cek Kolom Penjabaran (AW)
                 pj = r[c_penjabaran] if c_penjabaran else None
-                if not is_cell_empty(pj):
-                    # Jika isinya ANGKA (bukan rumus) dan > 0, berarti sudah dikerjakan (Skip)
-                    if not str(pj).startswith("="):
-                        try:
-                            val_pj = float(str(pj).replace(',',''))
-                            if val_pj > 0: return False
-                        except: pass
-                    else:
-                        # Jika isinya RUMUS, kita jangan langsung skip.
-                        # Kita cek apakah has_any_real_entry tadi True?
-                        # Jika has_any_real_entry masih False, berarti rumusnya menghasilkan 0 (Proses)
-                        if has_any_real_entry: return False
                 
-                # 3. Cek Selisih (AX)
+                # Jika Penjabaran KOSONG atau <= 0 atau RUMUS (tanpa isi kategori) -> PROSES
+                if is_not_positive(pj):
+                    # Jika dia RUMUS tapi ternyata ada isi kategori manual -> BERARTI SUDAH DIISI (Skip)
+                    if str(pj).startswith("=") and has_any_real_entry:
+                        return False
+                    return True
+                
+                # Jika Penjabaran > 0 (Angka Mantap), kita cek Selisih (AX)
+                # Jika Selisih masih besar, tetap proses (siapa tahu datanya salah)
                 sl = r[c_selisih] if c_selisih else None
-                if not is_cell_empty(sl) and not str(sl).startswith("="):
+                if sl is not None:
                     try:
-                        val_sl = float(str(sl).replace(',',''))
-                        if abs(val_sl) < 100: return False # Sudah balance
+                        s_sl = str(sl).strip()
+                        if s_sl.startswith("="): pass # Biarkan saja
+                        else:
+                            val_sl = float(s_sl.replace(',',''))
+                            if abs(val_sl) < 100: return False # Sudah balance (Skip)
                     except: pass
-
-                # 4. Cek Harga Jual
-                try:
-                    hj_raw = str(r[c_harga]).replace(',','') if r[c_harga] else "0"
-                    hj = float(hj_raw) if not hj_raw.startswith("=") else 999
-                    if hj <= 0: return False
-                except: return False
-
-                # Jika sampai sini dan tidak ada entry nyata, maka HAJAR (Proses)
-                if not has_any_real_entry: return True
                 
+                # Jika sampai sini dan penjabaran sudah ada isinya (>0), maka SKIP
                 return False
             
             targets = df[df.apply(should_process, axis=1)].copy()
