@@ -456,23 +456,20 @@ class CoreTaxApp(ctk.CTk):
             def should_process(r):
                 if pd.isna(r[c_faktur]): return False
                 
-                # Debug khusus baris 133 (Excel) -> r.name 131
-                is_b133 = (r.name == 131)
-                
+                def is_truly_empty(v):
+                    if v is None or pd.isna(v): return True
+                    s_v = str(v).strip().lower()
+                    if s_v == "" or s_v == "0" or s_v == "0.0" or s_v == "nan": return True
+                    return False
+
                 # 1. Cek Kategori Secara Mendalam
                 has_any_real_entry = False
                 for cat in self.dynamic_categories.keys():
                     if cat in r:
                         val = r[cat]
-                        if val is not None:
-                            s_v = str(val).strip()
-                            if s_v != "" and s_v != "0" and s_v != "0.0" and not s_v.startswith("="):
-                                try:
-                                    if float(s_v.replace(',','')) != 0:
-                                        has_any_real_entry = True
-                                        if is_b133: self.add_log(f"[DEBUG] Baris 133 punya isi di {cat}: {s_v}")
-                                        break
-                                except: pass
+                        if not is_truly_empty(val) and not str(val).startswith("="):
+                            has_any_real_entry = True
+                            break
 
                 # 2. ATURAN EMAS: Cek Kolom Penjabaran (AW)
                 pj = r[c_penjabaran] if c_penjabaran else None
@@ -480,11 +477,9 @@ class CoreTaxApp(ctk.CTk):
                 # Jika Penjabaran KOSONG atau <= 0 atau RUMUS (tanpa isi kategori) -> PROSES
                 if is_not_positive(pj):
                     if str(pj).startswith("=") and has_any_real_entry:
-                        if is_b133: self.add_log("[DEBUG] Baris 133 dilewati karena ada isi kategori.")
                         return False
                     return True
                 
-                if is_b133: self.add_log(f"[DEBUG] Baris 133 dilewati karena Penjabaran sudah terisi positif: {pj}")
                 return False
             
             targets = df[df.apply(should_process, axis=1)].copy()
