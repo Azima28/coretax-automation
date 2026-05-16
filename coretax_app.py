@@ -56,40 +56,60 @@ class MappingWindow(ctk.CTkToplevel):
         self.btn_save.grid(row=2, column=0, padx=20, pady=20)
 
     def auto_map(self):
-        # Satuan yang harus dibuang secara total agar tidak mengganggu
+        # Kamus Sinonim Universal (Pengetahuan Industri)
+        knowledge = {
+            "SEMEN": ["SMN", "PCC", "MU", "CEMENT"],
+            "BBM": ["SOLAR", "HSD", "DEX", "PERTA", "FUEL"],
+            "SPAREPART": ["SP", "HOSE", "BELT", "SEAL", "FILTER", "BEARING", "GEAR", "BOLT", "NUT", "TYRE", "BAN"],
+            "ASPAL": ["ASPHALT", "TACK", "PRIME", "HOTMIX"],
+            "PELUMAS": ["OLI", "OIL", "LUBE", "GREASE"],
+            "BIAYA": ["SERVICE", "REPAIR", "JASA", "MAINTENANCE"],
+            "ANGKUT": ["TRANSPORT", "LOGISTIK", "EXPEDISI"]
+        }
+        
         units_pattern = r'\b(\d+[\d.,]*\s*(KG|L|LTR|LITER|SAK|ZAK|UNIT|PCS|M3|METER|KUBIK|FEET|FT|INCH|IN|GR|GRAM|ML))\b'
         
         for name, var in self.combo_vars.items():
             real_cats = self.categories[1:] 
             u_name = name.upper()
             
-            # 1. Bersihkan Nama Barang secara total (Hapus Angka & Satuan)
-            # Contoh: "SEMEN 50 KG" -> "SEMEN"
+            # Bersihkan Nama Barang
             c_name = re.sub(units_pattern, '', u_name)
-            c_name = re.sub(r'[\d.,\-()/]+', ' ', c_name) # Hapus sisa angka/simbol
-            c_name = " ".join(c_name.split()) # Bersihkan spasi ganda
+            c_name = re.sub(r'[\d.,\-()/]+', ' ', c_name)
+            name_words = set(c_name.split())
             
             best_cat = "Abaikan"
             max_score = 0
             
             for cat in real_cats:
                 u_cat = cat.upper()
-                # Bersihkan Nama Kategori dari Excel
-                c_cat = re.sub(units_pattern, '', u_cat)
-                c_cat = re.sub(r'[\d.,\-()/]+', ' ', c_cat)
-                c_cat = " ".join(c_cat.split())
+                c_cat = re.sub(r'[\d.,\-()/]+', ' ', u_cat)
+                cat_words = set(c_cat.split())
                 
-                if not c_cat or not c_name: continue
-                
-                # A. LOGIKA UTAMA: Jika Nama Kategori ada di dalam Nama Barang
-                # Contoh: "SEMEN" ada di "SEMEN 50KG" -> MATCH 100%
-                if c_cat in c_name or c_name in c_cat:
+                # A. LOGIKA UTAMA: Keyword Match
+                # 1. Cek apakah ada kata kategori langsung di nama
+                if any(cw in name_words for cw in cat_words if len(cw) >= 3):
                     max_score = 1.0
                     best_cat = cat
                     break
                 
-                # B. LOGIKA CADANGAN: Fuzzy Match 70% (untuk typo tipis)
-                score = difflib.SequenceMatcher(None, c_name, c_cat).ratio()
+                # 2. Cek via Kamus Knowledge (Dinamis)
+                found_via_knowledge = False
+                for main_key, synonyms in knowledge.items():
+                    if main_key in u_cat or any(s in u_cat for s in synonyms):
+                        # Jika kategori ini adalah tentang SEMEN/BBM/dll
+                        # C. Cek apakah di Nama Barang ada salah satu sinonimnya
+                        if any(s in name_words for s in synonyms) or main_key in name_words:
+                            found_via_knowledge = True
+                            break
+                
+                if found_via_knowledge:
+                    max_score = 1.0
+                    best_cat = cat
+                    break
+                
+                # B. LOGIKA CADANGAN: Fuzzy Match 70%
+                score = difflib.SequenceMatcher(None, " ".join(name_words), " ".join(cat_words)).ratio()
                 if score > max_score:
                     max_score = score
                     best_cat = cat
