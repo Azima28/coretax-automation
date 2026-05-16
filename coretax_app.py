@@ -185,37 +185,38 @@ class CoreTaxApp(ctk.CTk):
                 found_token = False
                 def handle_request(request):
                     nonlocal found_token
-                    # Cek semua header secara case-insensitive
-                    headers = {k.lower(): v for k, v in request.headers.items()}
-                    auth = headers.get("authorization")
+                    # Ambil semua header (case-insensitive)
+                    h_lower = {k.lower(): v for k, v in request.headers.items()}
+                    auth = h_lower.get("authorization")
                     
-                    if auth and "Bearer" in auth and not found_token:
+                    if auth and "Bearer" in auth:
                         token = auth.replace("Bearer ", "").strip()
+                        # Update UI secara thread-safe
                         self.entry_token.delete(0, "end")
                         self.entry_token.insert(0, token)
                         
+                        # Ambil Cookies juga
                         cookies = context.cookies()
                         cookie_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
                         self.entry_cookie.delete(0, "end")
                         self.entry_cookie.insert(0, cookie_str)
                         
-                        self.add_log("[√] Sesi ditangkap secara otomatis!")
-                        found_token = True
+                        if not found_token:
+                            self.add_log("[√] Sesi (Token/Cookie) berhasil ditangkap!")
+                            found_token = True
 
                 page.on("request", handle_request)
                 page.on("close", lambda: self.btn_login.configure(state="normal", text="LOGIN CORETAX"))
                 
-                # Gunakan portal utama agar redirect terbaca sempurna
+                # Buka halaman login
                 page.goto("https://coretaxdjp.pajak.go.id/identityproviderportal/Account/Login")
-                self.add_log("[*] Silakan masukkan username & password di browser...")
+                self.add_log("[*] Menunggu login... Silakan selesaikan di browser.")
                 
                 while True:
                     time.sleep(1)
                     if not browser.is_connected(): break
-                    if found_token:
-                        # Tetap biarkan browser terbuka sebentar agar user bisa melihat dashboard
-                        time.sleep(2)
-                        break
+                    # Jangan break loop walaupun found_token True, biarkan terus monitor 
+                    # sampai browser ditutup oleh user agar token selalu paling update.
         except Exception as e:
             self.add_log(f"[!] Browser Error: {str(e)}")
             self.btn_login.configure(state="normal", text="LOGIN CORETAX")
