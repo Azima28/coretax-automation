@@ -365,89 +365,96 @@ class CoreTaxApp(ctk.CTk):
             
             if len(targets) == 0:
                 self.add_log("[!] Tidak ada faktur yang perlu diproses. Selesai.")
-                self.btn_run.configure(state="normal", text="START AUTO-CHECK")
+                self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            # TAHAP 1: HAPUS SEMUA TARGET DI EXCEL DULU (Sesuai Instruksi User)
+            # TAHAP 1: HAPUS SEMUA TARGET DI EXCEL DULU
             self.add_log(f"[*] Tahap 1: Membersihkan {len(targets)} baris di Excel & Saving...")
             wb_clear = openpyxl.load_workbook(self.file_path)
             ws_clear = wb_clear["PM"]
             for _, row in targets.iterrows():
                 ex_row = int(row['excel_row'])
-                self.add_log(f"    - Menghapus Baris {ex_row}...")
                 for cat_name, (p_idx, q_idx) in self.dynamic_categories.items():
                     ws_clear.cell(row=ex_row, column=p_idx).value = None
                     ws_clear.cell(row=ex_row, column=q_idx).value = None
             wb_clear.save(self.file_path)
-            self.add_log("[√] Seluruh baris target sudah BERSIH & file tersimpan.")
+            self.add_log("[√] Seluruh baris target sudah BERSIH.")
 
-            # CEK MODE: Jika hanya hapus, maka stop di sini
             if self.mode_var.get() == "ONLY-CLEAR (Hapus Saja)":
-                self.add_log("[√] MODE ONLY-CLEAR SELESAI. Silakan cek file Excel Anda.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            # TAHAP 2: MENGAMBIL DATA DARI PDF
-            all_invoice_items = {} # {excel_row: [items]}
-            unique_names = set()
+            # TAHAP 2: GLOBAL SCAN (Semua Faktur)
+            all_invoice_data = {} # {ex_row: [items]}
+            all_unique_names = set()
             
-            self.add_log("[*] Tahap 2: Menscan PDF untuk mencari isi faktur...")
+            self.add_log("[*] Tahap 2: Men-scan SELURUH PDF (Global Scan)...")
             for index, row in targets.iterrows():
                 raw_f = row[c_faktur]
                 expected_total = pd.to_numeric(row[c_harga], errors='coerce')
                 ex_row = int(row['excel_row'])
                 faktur = "{:.0f}".format(raw_f).zfill(17) if isinstance(raw_f, (float, int)) else str(raw_f).zfill(17)
                 
-                self.add_log(f"    - Scanning PDF (Baris {ex_row}): {faktur}")
+                self.add_log(f"    - Scanning PDF Baris {ex_row}: {faktur}")
                 items, msg = self._fetch_pdf_items(faktur, tid, expected_total)
                 if items:
-                    all_invoice_items[ex_row] = items
-                    for it in items: unique_names.add(it['name'])
+                    all_invoice_data[ex_row] = items
+                    for it in items: all_unique_names.add(it['name'])
                 else:
-                    self.add_log(f"      [!] Gagal: {msg}")
+                    self.add_log(f"      [!] Skip: {msg}")
 
-            if not all_invoice_items:
-                self.add_log("[!] Scan selesai, namun tidak ada data PDF yang cocok untuk diisi.")
-                self.btn_run.configure(state="normal", text="START AUTO-CHECK")
+            if not all_invoice_data:
+                self.add_log("[!] Scan selesai, tidak ada data yang ditemukan.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            # TAHAP 3: MAPPING
-            mapping_window = MappingWindow(self, list(unique_names), list(self.dynamic_categories.keys()))
+            # TAHAP 3: GLOBAL MAPPING (Hanya Tanya Sekali)
+            self.add_log(f"[*] Tahap 3: Menunggu Global Mapping untuk {len(all_unique_names)} barang unik...")
+            mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
             self.wait_window(mapping_window)
             final_mapping = mapping_window.result
             if not final_mapping:
                 self.add_log("[!] Mapping dibatalkan.")
-                self.btn_run.configure(state="normal", text="START AUTO-CHECK")
+                self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            # TAHAP 4: ISI DATA VALID KE EXCEL
-            self.add_log("[*] Tahap 4: Mengisi data baru & Final Saving...")
+            # TAHAP 4: ISI DATA DENGAN AKUMULASI
+            self.add_log("[*] Tahap 4: Mengisi data dengan Logika Akumulasi...")
             wb = openpyxl.load_workbook(self.file_path)
             ws = wb["PM"]
             success_count = 0
-            for target_row, items in all_invoice_items.items():
-                self.add_log(f"   -> Menulis ke baris {target_row}...")
+            
+            for ex_row, items in all_invoice_data.items():
+                self.add_log(f"   -> Memproses Baris {ex_row}...")
+                
+                # Akumulasi berdasarkan kategori hasil mapping
+                category_totals = {} # {Category: {'qty': 0, 'total': 0}}
+                
                 for it in items:
                     cat = final_mapping.get(it['name'])
-                    if cat and cat in self.dynamic_categories:
-                        p_idx, q_idx = self.dynamic_categories[cat]
-                        ws.cell(row=target_row, column=p_idx).value = it['total']
-                        ws.cell(row=target_row, column=p_idx).number_format = '#,##0'
-                        ws.cell(row=target_row, column=q_idx).value = it['qty']
-                        ws.cell(row=target_row, column=q_idx).number_format = '#,##0.00'
-                        self.add_log(f"      [√] {cat}: Harga={it['total']:,}, QTY={it['qty']}")
+                    if cat:
+                        if cat not in category_totals: category_totals[cat] = {'qty': 0, 'total': 0}
+                        category_totals[cat]['qty'] += it['qty']
+                        category_totals[cat]['total'] += it['total']
                 
+                # Tulis hasil akumulasi ke Excel
+                for cat, val in category_totals.items():
+                    if cat in self.dynamic_categories:
+                        p_idx, q_idx = self.dynamic_categories[cat]
+                        ws.cell(row=ex_row, column=p_idx).value = val['total']
+                        ws.cell(row=ex_row, column=p_idx).number_format = '#,##0'
+                        ws.cell(row=ex_row, column=q_idx).value = val['qty']
+                        ws.cell(row=ex_row, column=q_idx).number_format = '#,##0.00'
+                        self.add_log(f"      [√] {cat}: Total Harga={val['total']:,}, Total Qty={val['qty']}")
+
+                # Update Selisih
                 diff_idx = self._get_col_idx(ws, "Selisih")
-                if diff_idx: ws.cell(row=target_row, column=diff_idx).value = "-"
+                if diff_idx: ws.cell(row=ex_row, column=diff_idx).value = "-"
                 success_count += 1
-            
+
             wb.save(self.file_path)
-            self.add_log(f"[√] SELESAI: {success_count} faktur berhasil diperbarui.")
-            self.btn_run.configure(state="normal", text="START AUTO-CHECK")
-            
-            wb.save(self.file_path)
-            self.add_log(f"[√] BERHASIL: {success_count} faktur diupdate.")
-            self.btn_run.configure(state="normal", text="START AUTO-CHECK")
+            self.add_log(f"[√] SELESAI: {success_count} faktur berhasil diproses secara batch.")
+            self.btn_run.configure(state="normal", text="START PROCESS")
             
         except Exception as e:
             self.add_log(f"[!] ERROR: {str(e)}")
@@ -478,51 +485,53 @@ class CoreTaxApp(ctk.CTk):
                     if not table: continue
                     for row in table:
                         if not row or len(row) < 3: continue
-                        row_text = " ".join([str(c) if c is not None else "" for c in row])
-                        all_nums_raw = re.findall(r'[\d.]+(?:,[\d]+)?', row_text)
-                        parsed_nums = []
-                        for n in all_nums_raw:
-                            clean_n = n.replace('.', '').replace(',', '.')
-                            try:
-                                val = float(clean_n)
-                                if val > 0: parsed_nums.append(val)
+                        
+                        # 1. CEK STRUKTUR: Kolom pertama harus Angka Urut (1, 2, 3...)
+                        first_col = str(row[0]).strip()
+                        if not first_col.isdigit(): continue
+                        
+                        # 2. EKSTRAKSI NAMA (Kolom ke-3, Index 2)
+                        raw_name_cell = str(row[2]) if row[2] else ""
+                        # Bersihkan Nama dari teks rumus harga (seperti Rp 185 x 40.000)
+                        clean_name = re.split(r'Rp|\sx\s|\n', raw_name_cell)[0].strip()
+                        
+                        # 3. EKSTRAKSI QTY (Cari angka sebelum tanda 'x' atau di teks)
+                        qty = 1.0
+                        q_match = re.search(r'([\d.,]+)\s*x', raw_name_cell)
+                        if q_match:
+                            qty_str = q_match.group(1).replace('.', '').replace(',', '.')
+                            try: qty = float(qty_str)
                             except: pass
-                        if not parsed_nums: continue
-                        
-                        # Logic: Jika expected_total=0 (Quick Check), ambil semua baris yang terlihat seperti item
-                        # Jika expected_total > 0, hanya ambil yang match.
-                        found_total = next((n for n in parsed_nums if expected_total == 0 or abs(n - expected_total) < 100), None)
-                        
-                        if found_total:
-                            qty = None
-                            for n in parsed_nums:
-                                if n == found_total: continue
-                                for m in parsed_nums:
-                                    if m == found_total: continue
-                                    if abs(n * m - found_total) < (0.01 * found_total):
-                                        qty = min(n, m); break
-                                if qty: break
-                            if qty is None:
-                                q_match = re.search(r'x\s+([\d.,]+)', row_text)
-                                if q_match:
-                                    qs = q_match.group(1).replace('.', '').replace(',', '.')
-                                    qty = float(qs)
-                            
-                            # Fallback QTY=1 jika tidak ketemu x tapi total match
-                            if qty is None: qty = 1.0
+                        else:
+                            # Jika tidak ada 'x', cari angka apapun yang bukan harga total
+                            nums = re.findall(r'[\d.]+(?:,[\d]+)?', raw_name_cell)
+                            if nums:
+                                last_val = float(nums[-1].replace('.', '').replace(',', '.'))
+                                if len(nums) > 1:
+                                    qty = float(nums[0].replace('.', '').replace(',', '.'))
 
-                            cells = [str(c) if c is not None else "" for c in row]
-                            raw_name = max(cells, key=len).strip()
-                            name = re.split(r'Rp|\sx\s|\n', raw_name)[0].strip()
-                            extracted_items.append({"name": name, "qty": qty, "total": found_total})
-                            
-                            # Jika bukan Quick Check, langsung return item pertama yang match total
-                            if expected_total > 0: return extracted_items, "Success"
-            
-            if expected_total == 0 and extracted_items:
-                return extracted_items, "Success"
-                
-            return None, "Harga total tidak ditemukan di dalam PDF"
+                        # 4. EKSTRAKSI HARGA TOTAL BARIS (Kolom terakhir)
+                        price_cell = str(row[-1]).replace('.', '').replace(',', '.')
+                        try:
+                            price = float(price_cell)
+                        except:
+                            # Fallback: cari angka terbesar di baris
+                            all_row_text = " ".join([str(c) for c in row])
+                            nums = re.findall(r'[\d.]+(?:,[\d]+)?', all_row_text)
+                            price = max([float(n.replace('.', '').replace(',', '.')) for n in nums]) if nums else 0
+                        
+                        extracted_items.append({"name": clean_name, "qty": qty, "total": price})
+
+            if not extracted_items:
+                return None, "Tidak ada item barang bernomor ditemukan di PDF"
+
+            # 5. VALIDASI AKURASI (Jika bukan Quick Check)
+            if expected_total > 0:
+                sum_pdf = sum(it['total'] for it in extracted_items)
+                if abs(sum_pdf - expected_total) > 500: # Toleransi 500 rupiah
+                    return None, f"Total PDF ({sum_pdf:,}) tidak sinkron dengan Excel ({expected_total:,})"
+
+            return extracted_items, "Success"
         except Exception as e: return None, str(e)
 
 if __name__ == "__main__":
