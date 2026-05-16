@@ -516,15 +516,42 @@ class CoreTaxApp(ctk.CTk):
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            # TAHAP 3: GLOBAL MAPPING (Hanya Tanya Sekali)
-            self.add_log(f"[*] Tahap 3: Menunggu Global Mapping untuk {len(all_unique_names)} barang unik...")
-            mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
+            # TAHAP 3: GLOBAL MAPPING (Smart Grouping / Reduce)
+            self.add_log(f"[*] Tahap 3: Meringkas {len(all_unique_names)} barang menjadi kelompok unik...")
+            
+            # Algoritma Pembersihan Super Galak (Hapus semua angka, desimal, dan satuan)
+            def get_core_identity(name):
+                n = name.upper()
+                # 1. Hapus Satuan Majemuk & Tunggal
+                n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR)\b', ' ', n)
+                # 2. Hapus semua angka, desimal, dan simbol (2-3, 39,82, dll)
+                n = re.sub(r'[\d.,\-()/xX*]+', ' ', n)
+                # 3. Normalisasi spasi
+                return " ".join(n.split()).strip()
+
+            grouped_map = {} # {core_name: [original_names]}
+            for orig in all_unique_names:
+                core = get_core_identity(orig)
+                if not core: core = orig # Fallback
+                
+                if core not in grouped_map: grouped_map[core] = []
+                grouped_map[core].append(orig)
+            
+            # Tampilkan Mapping Window hanya untuk Identitas Inti yang sudah bersih
+            mapping_window = MappingWindow(self, list(grouped_map.keys()), list(self.dynamic_categories.keys()))
             self.wait_window(mapping_window)
-            final_mapping = mapping_window.result
-            if not final_mapping:
+            core_mapping_result = mapping_window.result
+            
+            if not core_mapping_result:
                 self.add_log("[!] Mapping dibatalkan.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
+            
+            # Terapkan hasil mapping ke semua variasi nama aslinya
+            final_mapping = {}
+            for core, category in core_mapping_result.items():
+                for orig in grouped_map[core]:
+                    final_mapping[orig] = category
 
             # TAHAP 4: ISI DATA DENGAN AKUMULASI
             self.add_log("[*] Tahap 4: Mengisi data dengan Logika Akumulasi...")
