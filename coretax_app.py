@@ -539,22 +539,25 @@ class CoreTaxApp(ctk.CTk):
             # TAHAP 3: GLOBAL MAPPING (Smart Grouping / Reduce)
             self.add_log(f"[*] Tahap 3: Meringkas {len(all_unique_names)} barang menjadi kelompok unik...")
             
+            # TAHAP 3: GLOBAL MAPPING (Smart Grouping / Reduce)
+            self.add_log(f"[*] Tahap 3: Meringkas {len(all_unique_names)} barang menjadi kelompok unik...")
+            
             # Algoritma Pembersihan Agresif (Anchor Grouping)
             def get_core_identity(name):
-                n = name.upper().strip()
+                n = str(name).upper().strip()
                 # 1. Hapus Satuan & Angka Dulu
-                n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR)\b', ' ', n)
+                n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR|CURAH|JB)\b', ' ', n)
                 n = re.sub(r'[\d.,\-()/xX*]+', ' ', n)
                 words = n.split()
-                if not words: return name
+                if not words: return name.upper()
                 
                 # 2. Logika Anchor (Jika diawali kata kunci, ambil depannya saja)
-                anchors = ["JASA", "SERVICE", "SP", "SMN", "GT", "WL", "R", "C", "MATERIAL"]
+                anchors = ["JASA", "SERVICE", "SP", "SMN", "GT", "WL", "R", "C", "MATERIAL", "ULTRAPRO", "SOLAR", "BIOSOLAR", "SPLIT", "SCREENING", "ABU"]
                 first_word = words[0]
                 
                 if first_word in anchors:
-                    # Khusus JASA dan SP, kita ambil 1 kata saja agar gabung semua
-                    if first_word in ["JASA", "SP", "SMN", "MATERIAL"]:
+                    # Khusus kata kunci utama, kita ambil 1 kata saja agar gabung semua
+                    if first_word in ["JASA", "SP", "SMN", "MATERIAL", "ULTRAPRO", "SOLAR", "BIOSOLAR", "ABU"]:
                         return first_word
                     # Untuk yang lain ambil 2 kata agar tidak terlalu umum
                     return " ".join(words[:2])
@@ -562,14 +565,15 @@ class CoreTaxApp(ctk.CTk):
                 # Jika tidak ada anchor, ambil 2 kata pertama sebagai identitas
                 return " ".join(words[:2])
 
-            # TAHAP 3: GLOBAL MAPPING (Mulai dari Mentah)
-            self.add_log(f"[*] Tahap 3: Menunggu mapping untuk {len(all_unique_names)} barang unik (MENTAH)...")
+            # Buat Map: {original_name: core_name}
+            name_to_core = {name: get_core_identity(name) for name in all_unique_names}
+            unique_cores = sorted(list(set(name_to_core.values())))
             
-            mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
+            mapping_window = MappingWindow(self, unique_cores, list(self.dynamic_categories.keys()))
             self.wait_window(mapping_window)
-            final_mapping = mapping_window.result
+            core_mapping = mapping_window.result # {core_name: category}
             
-            if not final_mapping:
+            if not core_mapping:
                 self.add_log("[!] Mapping dibatalkan.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
@@ -577,7 +581,7 @@ class CoreTaxApp(ctk.CTk):
             # TAHAP 4: ISI DATA DENGAN AKUMULASI
             self.add_log("[*] Tahap 4: Mengisi data dengan Logika Akumulasi...")
             wb = openpyxl.load_workbook(self.file_path)
-            ws = wb["PM"]
+            ws = wb[target_sheet_name]
             success_count = 0
             
             for ex_row, items in all_invoice_data.items():
@@ -587,8 +591,11 @@ class CoreTaxApp(ctk.CTk):
                 category_totals = {} # {Category: {'qty': 0, 'total': 0}}
                 
                 for it in items:
-                    cat = final_mapping.get(it['name'])
-                    if cat:
+                    orig_name = it['name']
+                    core_name = name_to_core.get(orig_name)
+                    cat = core_mapping.get(core_name)
+                    
+                    if cat and cat != "Abaikan":
                         if cat not in category_totals: category_totals[cat] = {'qty': 0, 'total': 0}
                         category_totals[cat]['qty'] += it['qty']
                         category_totals[cat]['total'] += it['total']
