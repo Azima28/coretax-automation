@@ -256,34 +256,22 @@ class CoreTaxApp(ctk.CTk):
         def run():
             self.add_log(f"\n[QUICK CHECK] Memproses Faktur: {faktur}...")
             # 1. RAW DATA (Cari Faktur)
-            headers = {"authority": "coretaxdjp.pajak.go.id", "authorization": f"Bearer {self.token}", "content-type": "application/json", "cookie": self.cookie, "x-dgt-code": "7AcAAA=="}
-            s_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/inputinvoice/list"
-            payload = {"BuyerTaxpayerAggregateIdentifier": tid, "TaxpayerAggregateIdentifier": tid, "First": 0, "Rows": 1, "LanguageId": "id-ID", "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": faktur, "MatchMode": "equals"}]}
             
-            try:
-                resp = requests.post(s_url, headers=headers, json=payload, timeout=15).json()
-                data = resp.get("Payload", {}).get("Data", [])
-                if not data:
-                    self.add_log("   [!] Faktur tidak ditemukan.")
-                    return
-                
-                inv = data[0]
-                self.add_log("\n--- [RAW DATA DARI SERVER] ---")
+            # 2. SYSTEM PARSING
+            self.add_log("[*] Mengekstrak isi PDF...")
+            items, msg, inv = self._fetch_pdf_items(faktur, tid, 0)
+            
+            if items:
+                self.add_log(f"--- [RAW DATA DARI SERVER] ---")
                 self.add_log(json.dumps(inv, indent=2))
-                self.add_log("------------------------------\n")
-                
-                # 2. SYSTEM PARSING
-                self.add_log("[*] Mengekstrak isi PDF...")
-                items, msg = self._fetch_pdf_items(faktur, tid, 0) # 0 means ignore total mismatch for quick check
-                if items:
-                    self.add_log("\n--- [HASIL PARSING SISTEM] ---")
-                    for it in items:
-                        self.add_log(f" > {it['name']} | Qty: {it['qty']} | Total: {it['total']:,}")
-                    self.add_log("------------------------------\n")
-                else:
-                    self.add_log(f"   [!] Gagal Parsing: {msg}")
-            except Exception as e:
-                self.add_log(f"[!] Error Quick Check: {e}")
+                self.add_log(f"--- [HASIL PARSING SISTEM] ---")
+                for it in items:
+                    self.add_log(f" > {it['name']} | Qty: {it['qty']} | Total: {it['total']:,}")
+            else:
+                if inv:
+                    self.add_log(f"--- [RAW DATA DARI SERVER] ---")
+                    self.add_log(json.dumps(inv, indent=2))
+                self.add_log(f"[!] Error Quick Check: {msg}")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -396,10 +384,15 @@ class CoreTaxApp(ctk.CTk):
                 faktur = "{:.0f}".format(raw_f).zfill(17) if isinstance(raw_f, (float, int)) else str(raw_f).zfill(17)
                 
                 self.add_log(f"    - Scanning PDF Baris {ex_row}: {faktur}")
-                items, msg = self._fetch_pdf_items(faktur, tid, expected_total)
+                items, msg, raw_json = self._fetch_pdf_items(faktur, tid, expected_total)
                 if items:
+                    self.add_log(f"--- [RAW DATA DARI SERVER: {faktur}] ---")
+                    self.add_log(json.dumps(raw_json, indent=2))
+                    self.add_log(f"--- [HASIL PARSING SISTEM] ---")
                     all_invoice_data[ex_row] = items
-                    for it in items: all_unique_names.add(it['name'])
+                    for it in items: 
+                        all_unique_names.add(it['name'])
+                        self.add_log(f"      > Item: {it['name']} | Qty: {it['qty']} | Total: {it['total']:,}")
                 else:
                     self.add_log(f"      [!] Skip: {msg}")
 
@@ -461,22 +454,21 @@ class CoreTaxApp(ctk.CTk):
             self.btn_run.configure(state="normal", text="START AUTO-CHECK")
 
     def _fetch_pdf_items(self, no_faktur, tid, expected_total):
-        time.sleep(1.2)
         headers = {"authority": "coretaxdjp.pajak.go.id", "authorization": f"Bearer {self.token}", "content-type": "application/json", "cookie": self.cookie, "x-dgt-code": "7AcAAA=="}
         try:
             s_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/inputinvoice/list"
             payload = {"BuyerTaxpayerAggregateIdentifier": tid, "TaxpayerAggregateIdentifier": tid, "First": 0, "Rows": 1, "LanguageId": "id-ID", "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": no_faktur, "MatchMode": "equals"}]}
             resp = requests.post(s_url, headers=headers, json=payload, timeout=15).json()
             data = resp.get("Payload", {}).get("Data", [])
-            if not data: return None, "Faktur tidak ditemukan di server"
-            
+            if not data: return None, "Faktur tidak ditemukan di server", None
+
             inv = data[0]
             d_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/DownloadInvoice/download-invoice-document"
             d_payload = {"EInvoiceRecordIdentifier": inv["RecordId"], "EInvoiceAggregateIdentifier": inv["AggregateIdentifier"], "DocumentAggregateIdentifier": inv["DocumentFormAggregateIdentifier"], "TaxpayerAggregateIdentifier": tid, "LetterNumber": no_faktur, "EInvoiceMenuType": "Input", "TaxInvoiceStatus": "APPROVED"}
             d_resp = requests.post(d_url, headers=headers, json=d_payload, timeout=15).json()
             pdf_b64 = d_resp.get("Content")
-            if not pdf_b64: return None, "Data PDF kosong dari server"
-            
+            if not pdf_b64: return None, "Data PDF kosong dari server", inv
+
             pdf_bytes = base64.b64decode(pdf_b64)
             extracted_items = []
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -485,54 +477,72 @@ class CoreTaxApp(ctk.CTk):
                     if not table: continue
                     for row in table:
                         if not row or len(row) < 3: continue
-                        
+
                         # 1. CEK STRUKTUR: Kolom pertama harus Angka Urut (1, 2, 3...)
                         first_col = str(row[0]).strip()
                         if not first_col.isdigit(): continue
-                        
+
                         # 2. EKSTRAKSI NAMA (Kolom ke-3, Index 2)
                         raw_name_cell = str(row[2]) if row[2] else ""
                         # Bersihkan Nama dari teks rumus harga (seperti Rp 185 x 40.000)
-                        clean_name = re.split(r'Rp|\sx\s|\n', raw_name_cell)[0].strip()
-                        
-                        # 3. EKSTRAKSI QTY (Cari angka sebelum tanda 'x' atau di teks)
-                        qty = 1.0
-                        q_match = re.search(r'([\d.,]+)\s*x', raw_name_cell)
-                        if q_match:
-                            qty_str = q_match.group(1).replace('.', '').replace(',', '.')
-                            try: qty = float(qty_str)
-                            except: pass
-                        else:
-                            # Jika tidak ada 'x', cari angka apapun yang bukan harga total
-                            nums = re.findall(r'[\d.]+(?:,[\d]+)?', raw_name_cell)
-                            if nums:
-                                last_val = float(nums[-1].replace('.', '').replace(',', '.'))
-                                if len(nums) > 1:
-                                    qty = float(nums[0].replace('.', '').replace(',', '.'))
+                        clean_name = re.split(r"Rp|\sx\s|\n", raw_name_cell)[0].strip()
+                        # NORMALISASI SPASI: Hapus spasi ganda agar nama yang mirip jadi satu
+                        clean_name = re.sub(r"\s+", " ", clean_name).strip()
 
-                        # 4. EKSTRAKSI HARGA TOTAL BARIS (Kolom terakhir)
-                        price_cell = str(row[-1]).replace('.', '').replace(',', '.')
-                        try:
-                            price = float(price_cell)
-                        except:
-                            # Fallback: cari angka terbesar di baris
-                            all_row_text = " ".join([str(c) for c in row])
-                            nums = re.findall(r'[\d.]+(?:,[\d]+)?', all_row_text)
-                            price = max([float(n.replace('.', '').replace(',', '.')) for n in nums]) if nums else 0
-                        
+                        # 4. EKSTRAKSI DATA (Logika Perkalian Matematika)
+                        all_nums = []
+                        all_cells_text = " ".join([str(c) for c in row[1:] if c])
+                        found_nums_raw = re.findall(r"[\d.]+(?:,[\d]+)?", all_cells_text)
+                        for n in found_nums_raw:
+                            try:
+                                val = float(n.replace(".", "").replace(",", "."))
+                                if val > 0: all_nums.append(val)
+                            except: pass
+
+                        if not all_nums: continue
+
+                        # Harga Total Baris: Pasti angka TERBESAR
+                        price = max(all_nums)
+
+                        # Qty: Cari pasangan A * B = Price (Logika Matematika 100% Akurat)
+                        qty = 1.0
+                        potential_candidates = [n for n in all_nums if n != price]
+
+                        found_math_match = False
+                        if len(potential_candidates) >= 2:
+                            for i, a in enumerate(potential_candidates):
+                                for b in potential_candidates[i:]:
+                                    # Cek apakah a * b mendekati price (toleransi 1% untuk pembulatan pajak)
+                                    if abs((a * b) - price) < (0.01 * price):
+                                        # Ambil yang terkecil sebagai Qty
+                                        qty = a if a < b else b
+                                        found_math_match = True
+                                        break
+                                if found_math_match: break
+
+                        # Fallback jika tidak ada perkalian yang match (misal Qty tersembunyi/tunggal)
+                        if not found_math_match:
+                            q_match = re.search(r"([\d.,]+)\s*x", all_cells_text)
+                            if q_match:
+                                qty = float(q_match.group(1).replace(".", "").replace(",", "."))
+                            else:
+                                # Jika ada angka selain Harga, ambil yang paling kecil (asumsi Qty)
+                                if potential_candidates:
+                                    qty = min(potential_candidates)
+
                         extracted_items.append({"name": clean_name, "qty": qty, "total": price})
 
             if not extracted_items:
-                return None, "Tidak ada item barang bernomor ditemukan di PDF"
+                return None, "Tidak ada item barang bernomor ditemukan di PDF", inv
 
             # 5. VALIDASI AKURASI (Jika bukan Quick Check)
             if expected_total > 0:
-                sum_pdf = sum(it['total'] for it in extracted_items)
+                sum_pdf = sum(it["total"] for it in extracted_items)
                 if abs(sum_pdf - expected_total) > 500: # Toleransi 500 rupiah
-                    return None, f"Total PDF ({sum_pdf:,}) tidak sinkron dengan Excel ({expected_total:,})"
+                    return None, f"Total PDF ({sum_pdf:,}) tidak sinkron dengan Excel ({expected_total:,})", inv
 
-            return extracted_items, "Success"
-        except Exception as e: return None, str(e)
+            return extracted_items, "Success", inv
+        except Exception as e: return None, str(e), None
 
 if __name__ == "__main__":
     app = CoreTaxApp()
