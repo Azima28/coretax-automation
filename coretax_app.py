@@ -438,50 +438,47 @@ class CoreTaxApp(ctk.CTk):
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
             
-            def should_process(r):
-                # 1. CEK APAKAH BARIS INI BENAR-BENAR "KOSONG" DI MATA USER
-                # Kita cek Jumlah Penjabaran (AW) dan Selisih (AX)
-                # Jika ada angkanya, berarti sudah dikerjakan (Skip)
-                
-                # Gunakan r.get('Jumlah Penjabaran') jika tersedia dari pandas
-                # Tapi lebih aman cek sum categories dulu
-                
-                if pd.isna(r[c_faktur]): return False
-                hj = pd.to_numeric(r[c_harga], errors='coerce')
-                if pd.isna(hj) or hj <= 0: return False
-                
-                # Cek apakah ada satu saja kategori yang sudah terisi
-                current_sum = 0
-                has_any_entry = False
-                for cat in self.dynamic_categories.keys():
-                    if cat in r:
-                        val = pd.to_numeric(r[cat], errors='coerce')
-                        if not pd.isna(val) and val != 0:
-                            current_sum += val
-                            has_any_entry = True
-                
-                # Cek kolom 'Jumlah Penjabaran' secara langsung (antisipasi formula belum hitung)
-                c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
-                val_penjabaran = pd.to_numeric(r[c_penjabaran], errors='coerce') if c_penjabaran else 0
-                
-                if not pd.isna(val_penjabaran) and val_penjabaran != 0:
-                    has_any_entry = True
-                    current_sum = val_penjabaran
+            c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
 
-                selisih_val = pd.to_numeric(r[c_selisih], errors='coerce') if (c_selisih and c_selisih in r) else None
-                
-                # Logika: Jika sudah ada isinya (has_any_entry) 
-                # DAN selisihnya kecil (reconciled), maka SKIP.
-                is_reconciled = False
-                if not pd.isna(selisih_val) and abs(selisih_val) < 100:
-                    is_reconciled = True
-                
-                # Jika benar-benar kosong, baru proses
-                if not has_any_entry: return True
-                # Jika ada isi tapi belum balance, proses (tapi nanti kita jangan hapus manual)
-                if not is_reconciled: return True
-                
+            def is_cell_empty(val):
+                if val is None: return True
+                s_val = str(val).strip()
+                if s_val == "" or s_val == "0" or s_val == "0.0": return True
+                # Jika diawali '=' berarti RUMUS, maka TIDAK KOSONG
+                if s_val.startswith("="): return False
                 return False
+
+            def should_process(r):
+                if pd.isna(r[c_faktur]): return False
+                
+                # 1. Cek Penjabaran & Selisih (Prioritas)
+                pj = r[c_penjabaran] if c_penjabaran else None
+                sl = r[c_selisih] if c_selisih else None
+                
+                # Jika Penjabaran ada isinya atau RUMUS, Lewati
+                if not is_cell_empty(pj): return False
+                
+                # Jika Selisih ada isinya (dan bukan rumus), cek balance
+                if not is_cell_empty(sl):
+                    try:
+                        if str(sl).startswith("="): return False # Rumus selisih = Ada kerjaan
+                        val_sl = float(str(sl).replace(',',''))
+                        if abs(val_sl) < 100: return False
+                    except: return False # Anggap sudah diisi jika error parsing
+                
+                # 2. Cek Harga Jual
+                try:
+                    hj_raw = str(r[c_harga]).replace(',','') if r[c_harga] else "0"
+                    hj = float(hj_raw) if not hj_raw.startswith("=") else 999
+                    if hj <= 0: return False
+                except: return False
+
+                # 3. Cek apakah ada kategori manual
+                for cat in self.dynamic_categories.keys():
+                    if cat in r and not is_cell_empty(r[cat]):
+                        return False
+                
+                return True
             
             targets = df[df.apply(should_process, axis=1)].copy()
             targets['excel_row'] = targets.index + h_idx + 2
