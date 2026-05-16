@@ -456,6 +456,9 @@ class CoreTaxApp(ctk.CTk):
             def should_process(r):
                 if pd.isna(r[c_faktur]): return False
                 
+                # Debug khusus baris 133 (Excel) -> r.name 131
+                is_b133 = (r.name == 131)
+                
                 # 1. Cek Kategori Secara Mendalam
                 has_any_real_entry = False
                 for cat in self.dynamic_categories.keys():
@@ -467,6 +470,7 @@ class CoreTaxApp(ctk.CTk):
                                 try:
                                     if float(s_v.replace(',','')) != 0:
                                         has_any_real_entry = True
+                                        if is_b133: self.add_log(f"[DEBUG] Baris 133 punya isi di {cat}: {s_v}")
                                         break
                                 except: pass
 
@@ -476,11 +480,11 @@ class CoreTaxApp(ctk.CTk):
                 # Jika Penjabaran KOSONG atau <= 0 atau RUMUS (tanpa isi kategori) -> PROSES
                 if is_not_positive(pj):
                     if str(pj).startswith("=") and has_any_real_entry:
-                        # self.add_log(f"[DEBUG] Baris {r.name + 2} dilewati: Rumus ada isi.")
+                        if is_b133: self.add_log("[DEBUG] Baris 133 dilewati karena ada isi kategori.")
                         return False
                     return True
                 
-                # self.add_log(f"[DEBUG] Baris {r.name + 2} dilewati: Sudah ada isi positif.")
+                if is_b133: self.add_log(f"[DEBUG] Baris 133 dilewati karena Penjabaran sudah terisi positif: {pj}")
                 return False
             
             targets = df[df.apply(should_process, axis=1)].copy()
