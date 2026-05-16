@@ -18,112 +18,118 @@ class MappingWindow(ctk.CTkToplevel):
     def __init__(self, parent, all_names, categories):
         super().__init__(parent)
         self.title("Batch Mapping: Tentukan Kategori Barang")
-        self.geometry("750x650")
+        self.geometry("800x700")
         self.result = {}
-        self.all_names = sorted(list(all_names))
-        self.categories = ["Abaikan"] + categories
-        self.combo_vars = {}
-        self.row_frames = []
+        self.categories = ["Abaikan"] + sorted(categories)
+        self.original_names = sorted(list(all_names)) # Simpan nama asli
+        self.current_items = self.original_names # Daftar yang sedang tampil
         
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        # UI Setup
+        self.label_info = ctk.CTkLabel(self, text=f"Ditemukan {len(self.original_names)} barang unik (ASLI).", font=("Arial", 14, "bold"))
+        self.label_info.pack(pady=10)
         
-        header_frame = ctk.CTkFrame(self)
-        header_frame.grid(row=0, column=0, padx=20, pady=10, sticky="ew")
+        btn_frame = ctk.CTkFrame(self)
+        btn_frame.pack(fill="x", padx=20)
         
-        self.label_info = ctk.CTkLabel(header_frame, text=f"Ditemukan {len(self.all_names)} barang unik (MENTAH).\nKlik AUTO-MAP untuk meringkas:", font=("Arial", 12, "bold"))
-        self.label_info.pack(side="left", padx=10)
-        
-        self.btn_auto = ctk.CTkButton(header_frame, text="AUTO-MAP (SMART)", fg_color="#E67E22", hover_color="#D35400", command=self.do_smart_action)
-        self.btn_auto.pack(side="right", padx=10)
+        self.btn_auto = ctk.CTkButton(btn_frame, text="AUTO-MAP & RINGKAS (SMART)", fg_color="#d35400", hover_color="#e67e22", command=self.do_smart_action)
+        self.btn_auto.pack(side="right", pady=10)
 
         self.scroll_frame = ctk.CTkScrollableFrame(self)
-        self.scroll_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
-        self.scroll_frame.grid_columnconfigure(0, weight=1)
+        self.scroll_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        self.combo_vars = {} # {display_name: StringVar}
+        self.render_ui(self.current_items)
 
-        self.render_ui(self.all_names)
-
-        self.btn_save = ctk.CTkButton(self, text="SIMPAN & PROSES SEMUA", fg_color="#27AE60", hover_color="#219150", command=self.save_mapping)
-        self.btn_save.grid(row=2, column=0, padx=20, pady=20)
+        self.btn_save = ctk.CTkButton(self, text="SIMPAN & PROSES SEMUA", fg_color="#27ae60", hover_color="#2ecc71", font=("Arial", 14, "bold"), command=self.save_mapping)
+        self.btn_save.pack(pady=20)
+        self.attributes('-topmost', True)
 
     def render_ui(self, names):
-        for f in self.row_frames: f.destroy()
-        self.row_frames = []
+        for widget in self.scroll_frame.winfo_children():
+            widget.destroy()
         self.combo_vars = {}
-        for i, name in enumerate(names):
+        
+        for name in names:
             row_f = ctk.CTkFrame(self.scroll_frame)
-            row_f.grid(row=i, column=0, padx=5, pady=5, sticky="ew")
-            self.row_frames.append(row_f)
+            row_f.pack(fill="x", pady=2, padx=5)
+            
             ctk.CTkLabel(row_f, text=f"Nama : {name}", wraplength=450, justify="left").pack(side="left", padx=10)
+            
             var = ctk.StringVar(value="Abaikan")
             combo = ctk.CTkComboBox(row_f, values=self.categories, variable=var, width=200)
             combo.pack(side="right", padx=10)
             self.combo_vars[name] = var
 
     def do_smart_action(self):
-        # 1. Grouping Logic
+        # 1. Grouping Logic (Anchor & Prefix)
         def get_core(name):
-            n = name.upper().strip()
-            n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR)\b', ' ', n)
+            n = str(name).upper().strip()
+            # Hapus Satuan
+            n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR|CURAH|JB)\b', ' ', n)
             n = re.sub(r'[\d.,\-()/xX*]+', ' ', n)
             words = n.split()
-            if not words: return name
-            anchors = ["JASA", "SERVICE", "SP", "SMN", "GT", "WL", "R", "C", "MATERIAL"]
-            if words[0] in anchors:
-                if words[0] in ["JASA", "SP", "SMN", "MATERIAL"]: return words[0]
+            if not words: return name.upper()
+            anchors = ["JASA", "SERVICE", "SP", "SMN", "GT", "WL", "R", "C", "MATERIAL", "ULTRAPRO", "SOLAR", "BIOSOLAR", "SPLIT", "SCREENING", "ABU"]
+            first_word = words[0]
+            if first_word in anchors:
+                if first_word in ["JASA", "SP", "SMN", "MATERIAL", "ULTRAPRO", "SOLAR", "BIOSOLAR", "ABU"]:
+                    return first_word
                 return " ".join(words[:2])
             return " ".join(words[:2])
 
-        grouped = {}
-        for n in self.all_names:
+        self.final_group_map = {} # {core: [originals]}
+        for n in self.original_names:
             core = get_core(n)
-            if core not in grouped: grouped[core] = []
-            grouped[core].append(n)
+            if core not in self.final_group_map: self.final_group_map[core] = []
+            self.final_group_map[core].append(n)
             
-        # 2. Re-render UI
-        display_list = []
-        self.final_group_map = {} 
-        for core, originals in grouped.items():
-            rep = originals[0]
-            count = len(originals)
-            d_name = f"{rep} (+{count-1} lainnya)" if count > 1 else rep
-            display_list.append(d_name)
-            self.final_group_map[d_name] = originals
-            
-        self.render_ui(display_list)
-        self.label_info.configure(text=f"Selesai! Diringkas menjadi {len(display_list)} kelompok.")
-        self.auto_map_logic()
-
-    def auto_map_logic(self):
+        # 2. Update UI ke versi Ringkas
+        self.current_items = sorted(list(self.final_group_map.keys()))
+        self.label_info.configure(text=f"Selesai! Diringkas menjadi {len(self.current_items)} kelompok.")
+        self.render_ui(self.current_items)
+        
+        # 3. Guess Categories
         knowledge = {
-            "SEMEN": ["SMN", "PCC", "MU", "CEMENT"],
-            "BBM": ["SOLAR", "HSD", "DEX", "PERTA", "FUEL"],
-            "SPAREPART": ["SP", "HOSE", "BELT", "SEAL", "FILTER", "BEARING", "GEAR", "BOLT", "NUT", "TYRE", "BAN"],
-            "ASPAL": ["ASPHALT", "TACK", "PRIME", "HOTMIX"],
-            "PELUMAS": ["OLI", "OIL", "LUBE", "GREASE"],
-            "BIAYA": ["SERVICE", "REPAIR", "JASA", "MAINTENANCE"],
-            "ANGKUT": ["TRANSPORT", "LOGISTIK", "EXPEDISI"]
+            "SPAREPART": ["BAN", "TYRE", "FILTER", "BOLT", "NUT", "BEARING", "PART", "OIL", "STRAP", "GREASE", "VALVE", "HOSE", "CHAMPIRO", "MAXMILER", "WL"],
+            "SEMEN": ["SEMEN", "SMN", "PCC", "ULTRAPRO", "PORTLAND", "ALUMINA"],
+            "BBM": ["SOLAR", "HSD", "BBM", "BIOSOLAR", "DEXLITE"],
+            "BESI": ["BESI", "STEEL", "WIRE", "MESH", "PLATE", "UNP", "CNP"],
+            "JASA ANGKUTAN": ["ANGKUTAN", "TRANSPORT", "CARGO", "EKSPEDISI", "TRUCKING"],
+            "SEWA": ["SEWA", "RENTAL", "RENT"],
+            "SPLIT": ["SPLIT", "BATU SPLIT"],
+            "SCREENING": ["SCREENING", "ABU BATU", "ABU"]
         }
-        for d_name, var in self.combo_vars.items():
-            u_name = d_name.upper()
+        
+        for name, var in self.combo_vars.items():
+            u_name = name.upper()
             best_cat = "Abaikan"; max_score = 0
             for cat in self.categories[1:]:
                 u_cat = cat.upper()
-                for main_key, synonyms in knowledge.items():
-                    if main_key in u_cat or any(s in u_cat for s in synonyms):
-                        if any(s in u_name for s in synonyms) or main_key in u_name:
+                # Cek Keyword Exact Match dulu
+                for k_cat, keys in knowledge.items():
+                    if k_cat in u_cat or any(k in u_cat for k in keys):
+                        if any(k in u_name for k in keys) or k_cat in u_name:
                             max_score = 1.0; best_cat = cat; break
                 if max_score == 1.0: break
+                
+                # Fallback ke Fuzzy
                 score = difflib.SequenceMatcher(None, u_name, u_cat).ratio()
                 if score > max_score: max_score = score; best_cat = cat
+                
             if max_score >= 0.7: var.set(best_cat)
+            elif "JASA" in u_name:
+                jasa_cat = next((c for c in self.categories if "JASA" in str(c).upper()), "Abaikan")
+                var.set(jasa_cat)
 
     def save_mapping(self):
+        # Jika sudah di-group, sebar hasil mapping ke semua nama asli
         if hasattr(self, 'final_group_map'):
-            for d_name, var in self.combo_vars.items():
-                for orig in self.final_group_map[d_name]:
-                    self.result[orig] = var.get()
+            for core_name, var in self.combo_vars.items():
+                cat = var.get()
+                for orig in self.final_group_map.get(core_name, []):
+                    self.result[orig] = cat
         else:
+            # Jika belum di-group (manual satu-satu)
             for name, var in self.combo_vars.items():
                 self.result[name] = var.get()
         self.destroy()
