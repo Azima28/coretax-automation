@@ -444,41 +444,65 @@ class CoreTaxApp(ctk.CTk):
                 if val is None: return True
                 s_val = str(val).strip()
                 if s_val == "" or s_val == "0" or s_val == "0.0": return True
-                # Jika diawali '=' berarti RUMUS, maka TIDAK KOSONG
-                if s_val.startswith("="): return False
                 return False
 
             def should_process(r):
                 if pd.isna(r[c_faktur]): return False
                 
-                # 1. Cek Penjabaran & Selisih (Prioritas)
+                # 1. Cek Kategori Secara Mendalam
+                # Kita cek satu-satu kolom kategori (Semen, BBM, dll)
+                current_sum = 0
+                has_any_real_entry = False
+                for cat in self.dynamic_categories.keys():
+                    if cat in r:
+                        val = r[cat]
+                        # Jika isinya bukan kosong dan bukan rumus, berarti ada angka manual
+                        if not is_cell_empty(val):
+                            if not str(val).startswith("="):
+                                try:
+                                    f_val = float(str(val).replace(',',''))
+                                    if f_val != 0: 
+                                        current_sum += f_val
+                                        has_any_real_entry = True
+                                except: pass
+                            else:
+                                # Jika isinya RUMUS di kolom kategori (jarang terjadi tapi mungkin)
+                                pass 
+                
+                # 2. Cek Kolom Penjabaran (AW)
                 pj = r[c_penjabaran] if c_penjabaran else None
+                if not is_cell_empty(pj):
+                    # Jika isinya ANGKA (bukan rumus) dan > 0, berarti sudah dikerjakan (Skip)
+                    if not str(pj).startswith("="):
+                        try:
+                            val_pj = float(str(pj).replace(',',''))
+                            if val_pj > 0: return False
+                        except: pass
+                    else:
+                        # Jika isinya RUMUS, kita jangan langsung skip.
+                        # Kita cek apakah has_any_real_entry tadi True?
+                        # Jika has_any_real_entry masih False, berarti rumusnya menghasilkan 0 (Proses)
+                        if has_any_real_entry: return False
+                
+                # 3. Cek Selisih (AX)
                 sl = r[c_selisih] if c_selisih else None
-                
-                # Jika Penjabaran ada isinya atau RUMUS, Lewati
-                if not is_cell_empty(pj): return False
-                
-                # Jika Selisih ada isinya (dan bukan rumus), cek balance
-                if not is_cell_empty(sl):
+                if not is_cell_empty(sl) and not str(sl).startswith("="):
                     try:
-                        if str(sl).startswith("="): return False # Rumus selisih = Ada kerjaan
                         val_sl = float(str(sl).replace(',',''))
-                        if abs(val_sl) < 100: return False
-                    except: return False # Anggap sudah diisi jika error parsing
-                
-                # 2. Cek Harga Jual
+                        if abs(val_sl) < 100: return False # Sudah balance
+                    except: pass
+
+                # 4. Cek Harga Jual
                 try:
                     hj_raw = str(r[c_harga]).replace(',','') if r[c_harga] else "0"
                     hj = float(hj_raw) if not hj_raw.startswith("=") else 999
                     if hj <= 0: return False
                 except: return False
 
-                # 3. Cek apakah ada kategori manual
-                for cat in self.dynamic_categories.keys():
-                    if cat in r and not is_cell_empty(r[cat]):
-                        return False
+                # Jika sampai sini dan tidak ada entry nyata, maka HAJAR (Proses)
+                if not has_any_real_entry: return True
                 
-                return True
+                return False
             
             targets = df[df.apply(should_process, axis=1)].copy()
             targets['excel_row'] = targets.index + h_idx + 2
