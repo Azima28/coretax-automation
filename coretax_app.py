@@ -519,21 +519,32 @@ class CoreTaxApp(ctk.CTk):
             # TAHAP 3: GLOBAL MAPPING (Smart Grouping / Reduce)
             self.add_log(f"[*] Tahap 3: Meringkas {len(all_unique_names)} barang menjadi kelompok unik...")
             
-            # Algoritma Pembersihan Super Galak (Hapus semua angka, desimal, dan satuan)
+            # Algoritma Pembersihan Agresif (Anchor Grouping)
             def get_core_identity(name):
-                n = name.upper()
-                # 1. Hapus Satuan Majemuk & Tunggal
+                n = name.upper().strip()
+                # 1. Hapus Satuan & Angka Dulu
                 n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR)\b', ' ', n)
-                # 2. Hapus semua angka, desimal, dan simbol (2-3, 39,82, dll)
                 n = re.sub(r'[\d.,\-()/xX*]+', ' ', n)
-                # 3. Normalisasi spasi
-                return " ".join(n.split()).strip()
+                words = n.split()
+                if not words: return name
+                
+                # 2. Logika Anchor (Jika diawali kata kunci, ambil depannya saja)
+                anchors = ["JASA", "SERVICE", "SP", "SMN", "GT", "WL", "R", "C", "MATERIAL"]
+                first_word = words[0]
+                
+                if first_word in anchors:
+                    # Khusus JASA dan SP, kita ambil 1 kata saja agar gabung semua
+                    if first_word in ["JASA", "SP", "SMN", "MATERIAL"]:
+                        return first_word
+                    # Untuk yang lain ambil 2 kata agar tidak terlalu umum
+                    return " ".join(words[:2])
+                
+                # Jika tidak ada anchor, ambil 2 kata pertama sebagai identitas
+                return " ".join(words[:2])
 
             grouped_map = {} # {core_name: [original_names]}
             for orig in all_unique_names:
                 core = get_core_identity(orig)
-                if not core: core = orig # Fallback
-                
                 if core not in grouped_map: grouped_map[core] = []
                 grouped_map[core].append(orig)
             
