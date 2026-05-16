@@ -285,6 +285,13 @@ class CoreTaxApp(ctk.CTk):
     def run_logic(self):
         try:
             self.btn_run.configure(state="disabled", text="PROCESSING...")
+            
+            tid = self._get_taxpayer_id()
+            if not tid:
+                self.add_log("[!] Gagal mendapatkan Taxpayer ID. Pastikan sudah login / Cek Koneksi.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+                
             wb = openpyxl.load_workbook(self.file_path)
             
             # 1. CARI SHEET YANG RELEVAN (Cari yang ada 'Nomor Faktur')
