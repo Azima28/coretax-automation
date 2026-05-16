@@ -56,47 +56,45 @@ class MappingWindow(ctk.CTkToplevel):
         self.btn_save.grid(row=2, column=0, padx=20, pady=20)
 
     def auto_map(self):
-        # Noise words universal untuk dibersihkan
-        noise = ["MATERIAL", "SEBANYAK", "METER", "KUBIK", "UNIT", "PCS", "KG", "LITER", "LT", "SAK", "ZAK", "M3", "BANYAKNYA", "JASA", "PADA", "PCC"]
+        # Satuan yang harus dibuang secara total agar tidak mengganggu
+        units_pattern = r'\b(\d+[\d.,]*\s*(KG|L|LTR|LITER|SAK|ZAK|UNIT|PCS|M3|METER|KUBIK|FEET|FT|INCH|IN|GR|GRAM|ML))\b'
         
         for name, var in self.combo_vars.items():
             real_cats = self.categories[1:] 
             u_name = name.upper()
             
-            # 1. Bersihkan Nama Barang (Hapus angka, simbol, dan noise)
-            c_name = re.sub(r'[\d.,\-()/]+', ' ', u_name)
-            for n in noise: c_name = c_name.replace(n, "")
-            c_name = " ".join(c_name.split()) # Normalisasi spasi
+            # 1. Bersihkan Nama Barang secara total (Hapus Angka & Satuan)
+            # Contoh: "SEMEN 50 KG" -> "SEMEN"
+            c_name = re.sub(units_pattern, '', u_name)
+            c_name = re.sub(r'[\d.,\-()/]+', ' ', c_name) # Hapus sisa angka/simbol
+            c_name = " ".join(c_name.split()) # Bersihkan spasi ganda
             
             best_cat = "Abaikan"
             max_score = 0
             
             for cat in real_cats:
                 u_cat = cat.upper()
-                # Bersihkan Kategori
-                c_cat = re.sub(r'[\d.,\-()/]+', ' ', u_cat)
-                for n in noise: c_cat = c_cat.replace(n, "")
+                # Bersihkan Nama Kategori dari Excel
+                c_cat = re.sub(units_pattern, '', u_cat)
+                c_cat = re.sub(r'[\d.,\-()/]+', ' ', c_cat)
                 c_cat = " ".join(c_cat.split())
                 
                 if not c_cat or not c_name: continue
                 
-                # A. Logika Kecocokan Persen (Sesuai Request: 70%)
-                # SequenceMatcher menghitung kemiripan global
+                # A. LOGIKA UTAMA: Jika Nama Kategori ada di dalam Nama Barang
+                # Contoh: "SEMEN" ada di "SEMEN 50KG" -> MATCH 100%
+                if c_cat in c_name or c_name in c_cat:
+                    max_score = 1.0
+                    best_cat = cat
+                    break
+                
+                # B. LOGIKA CADANGAN: Fuzzy Match 70% (untuk typo tipis)
                 score = difflib.SequenceMatcher(None, c_name, c_cat).ratio()
-                
-                # B. Bonus jika satu kata kunci utama cocok 100%
-                # Misal: SEMEN ada di dalam SEMEN KOPLO
-                cat_words = c_cat.split()
-                name_words = c_name.split()
-                for cw in cat_words:
-                    if len(cw) >= 3 and cw in name_words:
-                        score += 0.2 # Bonus kecocokan kata
-                
                 if score > max_score:
                     max_score = score
                     best_cat = cat
 
-            # Threshold 0.7 (70%) seperti yang diminta user
+            # Final Decision
             if max_score >= 0.7:
                 var.set(best_cat)
             else:
