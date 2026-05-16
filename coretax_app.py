@@ -56,52 +56,77 @@ class MappingWindow(ctk.CTkToplevel):
         self.btn_save.grid(row=2, column=0, padx=20, pady=20)
 
     def auto_map(self):
-        # Noise words yang sering ada di faktur dan bikin kotor
-        noise = ["MATERIAL", "SEBANYAK", "METER", "KUBIK", "UNIT", "PCS", "KG", "LITER", "LT", "SAK", "ZAK", "M3", "BANYAKNYA", "JASA", "PADA"]
+        # Kamus Pintar & Prioritas
+        synonyms = {
+            "SMN": "SEMEN",
+            "SP": "SPAREPART",
+            "OLI": "PELUMAS",
+            "OIL": "PELUMAS",
+            "ENGINE": "PELUMAS",
+            "GEAR": "PELUMAS",
+            "TACK": "ASPAL",
+            "PRIME": "PRIME COAT",
+            "HOSE": "SPAREPART",
+            "BELT": "SPAREPART",
+            "SEAL": "SPAREPART",
+            "KIT": "SPAREPART"
+        }
+        
+        noise = ["MATERIAL", "SEBANYAK", "METER", "KUBIK", "UNIT", "PCS", "KG", "LITER", "LT", "SAK", "ZAK", "M3", "BANYAKNYA", "JASA", "PADA", "BBSTD", "PCC"]
         
         for name, var in self.combo_vars.items():
-            real_cats = self.categories[1:] # Lewati "Abaikan"
+            real_cats = self.categories[1:]
             u_name = name.upper()
             
-            # 1. Bersihkan Nama Barang dari angka dan noise
-            clean_name = re.sub(r'[\d.,]+', '', u_name) # Hapus angka
-            for n in noise:
-                clean_name = clean_name.replace(n, "")
+            # 1. Expand singkatan & cari kata kunci utama
+            expanded_name = u_name
+            for short, full in synonyms.items():
+                if re.search(rf"\b{short}\b", u_name):
+                    expanded_name += " " + full
             
+            clean_name = re.sub(r'[\d.,]+', '', expanded_name)
+            for n in noise: clean_name = clean_name.replace(n, "")
             name_words = set(re.findall(r'\w+', clean_name))
             
-            best_cat = "Abaikan"
-            max_score = 0
+            results = [] # [(cat, score)]
             
             for cat in real_cats:
                 u_cat = cat.upper()
                 cat_words = set(re.findall(r'\w+', u_cat))
+                score = 0
                 
-                # A. Logika Exact Word Match (Sangat Kuat)
-                # Jika ada kata di kategori yang muncul persis di nama barang
+                # A. Exact Word Overlap
                 intersection = name_words.intersection(cat_words)
-                if intersection:
-                    # Makin banyak kata yang cocok, makin bagus
-                    score = len(intersection) / len(cat_words)
-                    if score > max_score:
-                        max_score = score
-                        best_cat = cat
+                score += len(intersection) * 20
                 
-                # B. Logika Substring Match
-                elif u_cat in u_name or u_name in u_cat:
-                    score = 0.8
-                    if score > max_score:
-                        max_score = score
-                        best_cat = cat
+                # B. Substring Match
+                if u_cat in u_name: score += 50
+                for cw in cat_words:
+                    if cw in u_name: score += 10
+                
+                # C. Special Logic: ENGINE/GEAR/OLI vs SLUDGE
+                if "OIL" in u_name or "OLI" in u_name or "PELUMAS" in u_name:
+                    if "ENGINE" in u_name or "GEAR" in u_name or "TRANSMISSION" in u_name:
+                        if "SLUDGE" in u_cat: score -= 100 # Penalti keras
+                        if "PELUMAS" in u_cat or "OLI" in u_cat: score += 100
+                
+                # D. Special Logic: SMN/SEMEN
+                if "SEMEN" in u_name or "SMN" in u_name:
+                    if "SEMEN" in u_cat: score += 100
+                    
+                # E. Special Logic: TACK/PRIME/ASPHALT
+                if "ASPHALT" in u_cat or "ASPAL" in u_cat:
+                    if any(x in u_name for x in ["TACK", "PRIME", "ASPAL", "HOTMIX"]):
+                        score += 80
 
-            # C. Fuzzy Match sebagai cadangan terakhir (Threshold Tinggi)
-            if best_cat == "Abaikan":
-                matches = difflib.get_close_matches(u_name, [c.upper() for c in real_cats], n=1, cutoff=0.7)
-                if matches:
-                    idx = [c.upper() for c in real_cats].index(matches[0])
-                    best_cat = real_cats[idx]
+                results.append((cat, score))
 
-            var.set(best_cat)
+            # Pilih yang skornya tertinggi dan positif
+            results.sort(key=lambda x: x[1], reverse=True)
+            if results and results[0][1] > 0:
+                var.set(results[0][0])
+            else:
+                var.set("Abaikan")
 
     def save_mapping(self):
         for name, var in self.combo_vars.items():
@@ -627,6 +652,8 @@ class CoreTaxApp(ctk.CTk):
                                 # Jika ada angka selain Harga, ambil yang paling kecil (asumsi Qty)
                                 if potential_candidates:
                                     qty = min(potential_candidates)
+                                else:
+                                    qty = 1.0
 
                         extracted_items.append({"name": clean_name, "qty": qty, "total": price})
 
