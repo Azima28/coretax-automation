@@ -15,48 +15,86 @@ import os
 import threading
 
 class MappingWindow(ctk.CTkToplevel):
-    def __init__(self, parent, unique_names, categories):
+    def __init__(self, parent, all_names, categories):
         super().__init__(parent)
         self.title("Batch Mapping: Tentukan Kategori Barang")
         self.geometry("750x650")
         self.result = {}
-        self.unique_names = unique_names
+        self.all_names = sorted(list(all_names))
         self.categories = ["Abaikan"] + categories
         self.combo_vars = {}
+        self.row_frames = []
         
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
         
-        # Header & Tombol Cerdas
         header_frame = ctk.CTkFrame(self)
         header_frame.grid(row=0, column=0, padx=20, pady=10, sticky="ew")
         
-        ctk.CTkLabel(header_frame, text="Ditemukan beberapa jenis barang baru.\nSilakan tentukan kolom Excel untuk setiap nama barang:", font=("Arial", 12, "bold")).pack(side="left", padx=10)
+        self.label_info = ctk.CTkLabel(header_frame, text=f"Ditemukan {len(self.all_names)} barang unik (MENTAH).\nKlik AUTO-MAP untuk meringkas:", font=("Arial", 12, "bold"))
+        self.label_info.pack(side="left", padx=10)
         
-        self.btn_auto = ctk.CTkButton(header_frame, text="AUTO-MAP (SMART)", fg_color="#E67E22", hover_color="#D35400", command=self.auto_map)
+        self.btn_auto = ctk.CTkButton(header_frame, text="AUTO-MAP (SMART)", fg_color="#E67E22", hover_color="#D35400", command=self.do_smart_action)
         self.btn_auto.pack(side="right", padx=10)
 
-        # Scrollable area
         self.scroll_frame = ctk.CTkScrollableFrame(self)
         self.scroll_frame.grid(row=1, column=0, padx=20, pady=10, sticky="nsew")
         self.scroll_frame.grid_columnconfigure(0, weight=1)
 
-        for i, name in enumerate(self.unique_names):
+        self.render_ui(self.all_names)
+
+        self.btn_save = ctk.CTkButton(self, text="SIMPAN & PROSES SEMUA", fg_color="#27AE60", hover_color="#219150", command=self.save_mapping)
+        self.btn_save.grid(row=2, column=0, padx=20, pady=20)
+
+    def render_ui(self, names):
+        for f in self.row_frames: f.destroy()
+        self.row_frames = []
+        self.combo_vars = {}
+        for i, name in enumerate(names):
             row_f = ctk.CTkFrame(self.scroll_frame)
             row_f.grid(row=i, column=0, padx=5, pady=5, sticky="ew")
-            
+            self.row_frames.append(row_f)
             ctk.CTkLabel(row_f, text=f"Nama : {name}", wraplength=450, justify="left").pack(side="left", padx=10)
-            
             var = ctk.StringVar(value="Abaikan")
             combo = ctk.CTkComboBox(row_f, values=self.categories, variable=var, width=200)
             combo.pack(side="right", padx=10)
             self.combo_vars[name] = var
 
-        self.btn_save = ctk.CTkButton(self, text="SIMPAN & PROSES SEMUA", fg_color="#27AE60", hover_color="#219150", command=self.save_mapping)
-        self.btn_save.grid(row=2, column=0, padx=20, pady=20)
+    def do_smart_action(self):
+        # 1. Grouping Logic
+        def get_core(name):
+            n = name.upper().strip()
+            n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR)\b', ' ', n)
+            n = re.sub(r'[\d.,\-()/xX*]+', ' ', n)
+            words = n.split()
+            if not words: return name
+            anchors = ["JASA", "SERVICE", "SP", "SMN", "GT", "WL", "R", "C", "MATERIAL"]
+            if words[0] in anchors:
+                if words[0] in ["JASA", "SP", "SMN", "MATERIAL"]: return words[0]
+                return " ".join(words[:2])
+            return " ".join(words[:2])
 
-    def auto_map(self):
-        # Kamus Sinonim Universal (Pengetahuan Industri)
+        grouped = {}
+        for n in self.all_names:
+            core = get_core(n)
+            if core not in grouped: grouped[core] = []
+            grouped[core].append(n)
+            
+        # 2. Re-render UI
+        display_list = []
+        self.final_group_map = {} 
+        for core, originals in grouped.items():
+            rep = originals[0]
+            count = len(originals)
+            d_name = f"{rep} (+{count-1} lainnya)" if count > 1 else rep
+            display_list.append(d_name)
+            self.final_group_map[d_name] = originals
+            
+        self.render_ui(display_list)
+        self.label_info.configure(text=f"Selesai! Diringkas menjadi {len(display_list)} kelompok.")
+        self.auto_map_logic()
+
+    def auto_map_logic(self):
         knowledge = {
             "SEMEN": ["SMN", "PCC", "MU", "CEMENT"],
             "BBM": ["SOLAR", "HSD", "DEX", "PERTA", "FUEL"],
@@ -66,63 +104,28 @@ class MappingWindow(ctk.CTkToplevel):
             "BIAYA": ["SERVICE", "REPAIR", "JASA", "MAINTENANCE"],
             "ANGKUT": ["TRANSPORT", "LOGISTIK", "EXPEDISI"]
         }
-        
-        units_pattern = r'\b(\d+[\d.,]*\s*(KG|L|LTR|LITER|SAK|ZAK|UNIT|PCS|M3|METER|KUBIK|FEET|FT|INCH|IN|GR|GRAM|ML))\b'
-        
-        for name, var in self.combo_vars.items():
-            real_cats = self.categories[1:] 
-            u_name = name.upper()
-            
-            # Bersihkan Nama Barang
-            c_name = re.sub(units_pattern, '', u_name)
-            c_name = re.sub(r'[\d.,\-()/]+', ' ', c_name)
-            name_words = set(c_name.split())
-            
-            best_cat = "Abaikan"
-            max_score = 0
-            
-            for cat in real_cats:
+        for d_name, var in self.combo_vars.items():
+            u_name = d_name.upper()
+            best_cat = "Abaikan"; max_score = 0
+            for cat in self.categories[1:]:
                 u_cat = cat.upper()
-                c_cat = re.sub(r'[\d.,\-()/]+', ' ', u_cat)
-                cat_words = set(c_cat.split())
-                
-                # A. LOGIKA UTAMA: Keyword Match
-                # 1. Cek apakah ada kata kategori langsung di nama
-                if any(cw in name_words for cw in cat_words if len(cw) >= 3):
-                    max_score = 1.0
-                    best_cat = cat
-                    break
-                
-                # 2. Cek via Kamus Knowledge (Dinamis)
-                found_via_knowledge = False
                 for main_key, synonyms in knowledge.items():
                     if main_key in u_cat or any(s in u_cat for s in synonyms):
-                        # Jika kategori ini adalah tentang SEMEN/BBM/dll
-                        # C. Cek apakah di Nama Barang ada salah satu sinonimnya
-                        if any(s in name_words for s in synonyms) or main_key in name_words:
-                            found_via_knowledge = True
-                            break
-                
-                if found_via_knowledge:
-                    max_score = 1.0
-                    best_cat = cat
-                    break
-                
-                # B. LOGIKA CADANGAN: Fuzzy Match 70%
-                score = difflib.SequenceMatcher(None, " ".join(name_words), " ".join(cat_words)).ratio()
-                if score > max_score:
-                    max_score = score
-                    best_cat = cat
-
-            # Final Decision
-            if max_score >= 0.7:
-                var.set(best_cat)
-            else:
-                var.set("Abaikan")
+                        if any(s in u_name for s in synonyms) or main_key in u_name:
+                            max_score = 1.0; best_cat = cat; break
+                if max_score == 1.0: break
+                score = difflib.SequenceMatcher(None, u_name, u_cat).ratio()
+                if score > max_score: max_score = score; best_cat = cat
+            if max_score >= 0.7: var.set(best_cat)
 
     def save_mapping(self):
-        for name, var in self.combo_vars.items():
-            self.result[name] = var.get()
+        if hasattr(self, 'final_group_map'):
+            for d_name, var in self.combo_vars.items():
+                for orig in self.final_group_map[d_name]:
+                    self.result[orig] = var.get()
+        else:
+            for name, var in self.combo_vars.items():
+                self.result[name] = var.get()
         self.destroy()
 
 class CoreTaxApp(ctk.CTk):
@@ -542,38 +545,17 @@ class CoreTaxApp(ctk.CTk):
                 # Jika tidak ada anchor, ambil 2 kata pertama sebagai identitas
                 return " ".join(words[:2])
 
-            grouped_map = {} # {core_name: [original_names]}
-            for orig in all_unique_names:
-                core = get_core_identity(orig)
-                if core not in grouped_map: grouped_map[core] = []
-                grouped_map[core].append(orig)
+            # TAHAP 3: GLOBAL MAPPING (Mulai dari Mentah)
+            self.add_log(f"[*] Tahap 3: Menunggu mapping untuk {len(all_unique_names)} barang unik (MENTAH)...")
             
-            # Tampilkan Mapping Window dengan Nama Lengkap Perwakilan agar transparan
-            display_map = {} # {display_name: core_name}
-            display_list = []
-            
-            for core, originals in grouped_map.items():
-                rep_name = originals[0] # Ambil nama lengkap pertama sebagai perwakilan
-                count = len(originals)
-                d_name = f"{rep_name} (+{count-1} lainnya)" if count > 1 else rep_name
-                display_list.append(d_name)
-                display_map[d_name] = core
-            
-            mapping_window = MappingWindow(self, display_list, list(self.dynamic_categories.keys()))
+            mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
             self.wait_window(mapping_window)
-            display_mapping_result = mapping_window.result
+            final_mapping = mapping_window.result
             
-            if not display_mapping_result:
+            if not final_mapping:
                 self.add_log("[!] Mapping dibatalkan.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
-            
-            # Balikkan ke Original Names
-            final_mapping = {}
-            for d_name, category in display_mapping_result.items():
-                core = display_map[d_name]
-                for orig in grouped_map[core]:
-                    final_mapping[orig] = category
 
             # TAHAP 4: ISI DATA DENGAN AKUMULASI
             self.add_log("[*] Tahap 4: Mengisi data dengan Logika Akumulasi...")
