@@ -457,7 +457,6 @@ class CoreTaxApp(ctk.CTk):
                 if pd.isna(r[c_faktur]): return False
                 
                 # 1. Cek Kategori Secara Mendalam
-                # Kita cek apakah ada satu saja kategori yang isinya BUKAN 0 dan BUKAN rumus
                 has_any_real_entry = False
                 for cat in self.dynamic_categories.keys():
                     if cat in r:
@@ -476,24 +475,12 @@ class CoreTaxApp(ctk.CTk):
                 
                 # Jika Penjabaran KOSONG atau <= 0 atau RUMUS (tanpa isi kategori) -> PROSES
                 if is_not_positive(pj):
-                    # Jika dia RUMUS tapi ternyata ada isi kategori manual -> BERARTI SUDAH DIISI (Skip)
                     if str(pj).startswith("=") and has_any_real_entry:
+                        # self.add_log(f"[DEBUG] Baris {r.name + 2} dilewati: Rumus ada isi.")
                         return False
                     return True
                 
-                # Jika Penjabaran > 0 (Angka Mantap), kita cek Selisih (AX)
-                # Jika Selisih masih besar, tetap proses (siapa tahu datanya salah)
-                sl = r[c_selisih] if c_selisih else None
-                if sl is not None:
-                    try:
-                        s_sl = str(sl).strip()
-                        if s_sl.startswith("="): pass # Biarkan saja
-                        else:
-                            val_sl = float(s_sl.replace(',',''))
-                            if abs(val_sl) < 100: return False # Sudah balance (Skip)
-                    except: pass
-                
-                # Jika sampai sini dan penjabaran sudah ada isinya (>0), maka SKIP
+                # self.add_log(f"[DEBUG] Baris {r.name + 2} dilewati: Sudah ada isi positif.")
                 return False
             
             targets = df[df.apply(should_process, axis=1)].copy()
