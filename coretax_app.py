@@ -56,75 +56,55 @@ class MappingWindow(ctk.CTkToplevel):
         self.btn_save.grid(row=2, column=0, padx=20, pady=20)
 
     def auto_map(self):
-        # Kamus Pintar & Prioritas
-        synonyms = {
-            "SMN": "SEMEN",
-            "SP": "SPAREPART",
-            "OLI": "PELUMAS",
-            "OIL": "PELUMAS",
-            "ENGINE": "PELUMAS",
-            "GEAR": "PELUMAS",
-            "TACK": "ASPAL",
-            "PRIME": "PRIME COAT",
-            "HOSE": "SPAREPART",
-            "BELT": "SPAREPART",
-            "SEAL": "SPAREPART",
-            "KIT": "SPAREPART"
-        }
-        
-        noise = ["MATERIAL", "SEBANYAK", "METER", "KUBIK", "UNIT", "PCS", "KG", "LITER", "LT", "SAK", "ZAK", "M3", "BANYAKNYA", "JASA", "PADA", "BBSTD", "PCC"]
+        # Noise words universal (hanya untuk pembersihan dasar)
+        noise = ["MATERIAL", "SEBANYAK", "METER", "KUBIK", "UNIT", "PCS", "KG", "LITER", "LT", "SAK", "ZAK", "M3", "BANYAKNYA", "JASA", "PADA", "PCC"]
         
         for name, var in self.combo_vars.items():
-            real_cats = self.categories[1:]
+            real_cats = self.categories[1:] # Kategori dari Excel
             u_name = name.upper()
             
-            # 1. Expand singkatan & cari kata kunci utama
-            expanded_name = u_name
-            for short, full in synonyms.items():
-                if re.search(rf"\b{short}\b", u_name):
-                    expanded_name += " " + full
+            # 1. Tokenisasi Nama Barang (Ambil kata-kata penting saja)
+            # Hapus angka dan simbol
+            clean_name = re.sub(r'[\d.,\-()/]+', ' ', u_name)
+            name_words = [w for w in clean_name.split() if len(w) >= 3 and w not in noise]
             
-            clean_name = re.sub(r'[\d.,]+', '', expanded_name)
-            for n in noise: clean_name = clean_name.replace(n, "")
-            name_words = set(re.findall(r'\w+', clean_name))
-            
-            results = [] # [(cat, score)]
+            best_cat = "Abaikan"
+            max_score = 0
             
             for cat in real_cats:
                 u_cat = cat.upper()
-                cat_words = set(re.findall(r'\w+', u_cat))
-                score = 0
+                # Tokenisasi Kategori (Misal: "PRIME COAT" -> ["PRIME", "COAT"])
+                cat_words = [w for w in re.sub(r'[\d.,\-()/]+', ' ', u_cat).split() if len(w) >= 3]
                 
-                # A. Exact Word Overlap
-                intersection = name_words.intersection(cat_words)
-                score += len(intersection) * 20
+                if not cat_words: continue
                 
-                # B. Substring Match
-                if u_cat in u_name: score += 50
+                match_points = 0
                 for cw in cat_words:
-                    if cw in u_name: score += 10
-                
-                # C. Special Logic: ENGINE/GEAR/OLI vs SLUDGE
-                if "OIL" in u_name or "OLI" in u_name or "PELUMAS" in u_name:
-                    if "ENGINE" in u_name or "GEAR" in u_name or "TRANSMISSION" in u_name:
-                        if "SLUDGE" in u_cat: score -= 100 # Penalti keras
-                        if "PELUMAS" in u_cat or "OLI" in u_cat: score += 100
-                
-                # D. Special Logic: SMN/SEMEN
-                if "SEMEN" in u_name or "SMN" in u_name:
-                    if "SEMEN" in u_cat: score += 100
-                    
-                # E. Special Logic: TACK/PRIME/ASPHALT
-                if "ASPHALT" in u_cat or "ASPAL" in u_cat:
-                    if any(x in u_name for x in ["TACK", "PRIME", "ASPAL", "HOTMIX"]):
-                        score += 80
+                    # Cek apakah kata kategori ada di nama barang (Exact atau Fuzzy)
+                    # A. Exact Match dalam kata
+                    if any(cw == nw for nw in name_words):
+                        match_points += 2.0
+                    # B. Partial Match (Misal: OLI ada di dalam OLIENGGINE)
+                    elif any(cw in nw or nw in cw for nw in name_words):
+                        match_points += 1.0
+                    # C. Fuzzy Match (Misal: OIL vs OLI)
+                    else:
+                        matches = difflib.get_close_matches(cw, name_words, n=1, cutoff=0.7)
+                        if matches: match_points += 1.5
 
-                results.append((cat, score))
+                # Hitung skor akhir: Persentase kecocokan kata kategori
+                score = match_points / (len(cat_words) * 2)
+                
+                # Bonus jika nama kategori muncul utuh
+                if u_cat in u_name: score += 1.0
+                
+                if score > max_score:
+                    max_score = score
+                    best_cat = cat
 
-            # Pilih yang skornya tertinggi dan positif
-            results.sort(key=lambda x: x[1], reverse=True)
-            if results and results[0][1] > 0:
-                var.set(results[0][0])
+            # Threshold minimal untuk dianggap "Pintar"
+            if max_score >= 0.5:
+                var.set(best_cat)
             else:
                 var.set("Abaikan")
 
