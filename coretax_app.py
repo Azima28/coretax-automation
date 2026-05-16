@@ -284,45 +284,74 @@ class CoreTaxApp(ctk.CTk):
 
     def run_logic(self):
         try:
-            self.add_log(f"[+] File Load: {os.path.basename(self.file_path)}")
-            tid = self.tid if hasattr(self, 'tid') and self.tid else self.entry_tid.get()
+            self.btn_run.configure(state="disabled", text="PROCESSING...")
+            wb = openpyxl.load_workbook(self.file_path)
             
-            # PHASE 0: DETEKSI STRUKTUR
-            self.add_log("[*] Tahap 0: Mendeteksi struktur Excel secara dinamis...")
-            h_idx = self.auto_detect_header(self.file_path)
-            df = pd.read_excel(self.file_path, sheet_name='PM', header=h_idx)
-            headers = df.columns.tolist()
+            # 1. CARI SHEET YANG RELEVAN (Cari yang ada 'Nomor Faktur')
+            target_sheet_name = None
+            for sn in wb.sheetnames:
+                ws_temp = wb[sn]
+                found_header = False
+                for r in range(1, 15): # Cek 15 baris pertama
+                    try:
+                        row_vals = [str(cell.value).upper() if cell.value else "" for cell in ws_temp[r]]
+                        if any("NOMOR FAKTUR" in v for v in row_vals):
+                            target_sheet_name = sn
+                            found_header = True
+                            break
+                    except: pass
+                if found_header: break
             
-            # Deteksi Kategori secara Dinamis
-            self.dynamic_categories = {} # {Kategori: (Index_Harga, Index_QTY)}
-            blacklist = ["NPWP", "NAMA", "NOMOR FAKTUR", "TANGGAL", "MASA", "TAHUN",
-                         "STATUS", "NO. INV", "HARGA JUAL", "DPP", "PPN", "KET",
-                         "JUMLAH PENJABARAN", "SELISIH", "QTY"]
+            if not target_sheet_name:
+                self.add_log("[!] ERROR: Tidak menemukan kolom 'Nomor Faktur' di sheet manapun.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+            
+            self.add_log(f"[*] Memproses Sheet: {target_sheet_name}")
+            ws = wb[target_sheet_name]
+            
+            # Konversi ke DataFrame untuk kemudahan filter
+            data_raw = list(ws.values)
+            # Cari baris header yang benar
+            h_idx = 0
+            for i, row in enumerate(data_raw):
+                row_str = [str(v).upper() if v else "" for v in row]
+                if any("NOMOR FAKTUR" in v for v in row_str):
+                    h_idx = i
+                    break
+            
+            cols = data_raw[h_idx]
+            df = pd.DataFrame(data_raw[h_idx+1:], columns=cols)
+            # Bersihkan nama kolom dari spasi tersembunyi
+            df.columns = [str(c).strip() if c else f"COL_{i}" for i, c in enumerate(df.columns)]
+            headers = list(df.columns)
+
+            self.dynamic_categories = {}
+            blacklist = ["TOTAL", "DPP", "PPN", "JUMLAH PENJABARAN", "SELISIH", "QTY", "KET"]
             
             for i, col in enumerate(headers):
                 col_str = str(col).strip().upper()
                 if "QTY" in col_str:
                     if i + 1 < len(headers):
-                        cat_name = str(headers[i+1]).strip()
-                        is_blacklisted = any(b in cat_name.upper() for b in blacklist)
-                        if not is_blacklisted:
-                            self.dynamic_categories[cat_name] = (i+2, i+1)
+                        raw_cat = str(headers[i+1]).strip()
+                        is_blacklisted = any(b in raw_cat.upper() for b in blacklist)
+                        if not is_blacklisted and raw_cat:
+                            self.dynamic_categories[raw_cat] = (i+2, i+1) # (HargaCol, QtyCol)
             
             self.add_log(f"[+] Kategori terdeteksi: {', '.join(self.dynamic_categories.keys())}")
             
-            c_faktur = next((c for c in headers if "Nomor Faktur" in str(c)), None)
-            c_harga  = next((c for c in headers if "Harga Jual" in str(c)), None)
-            c_selisih = next((c for c in headers if "Selisih" in str(c)), None)
+            # Ambil index kolom penting
+            c_faktur = next((c for c in headers if "NOMOR FAKTUR" in str(c).upper()), None)
+            c_harga  = next((c for c in headers if "HARGA JUAL" in str(c).upper()), None)
+            c_selisih = next((c for c in headers if "SELISIH" in str(c).upper()), None)
             
-            # Filter baris: (Kosong) OR (Salah Hitung) OR (Data Tipe Teks/Junk)
+            if not c_faktur or not c_harga:
+                self.add_log("[!] ERROR: Kolom 'Nomor Faktur' atau 'Harga Jual' tidak ditemukan.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+            
+            # Filter baris: (Kosong) OR (Belum Dikerjakan)
             def should_process(r):
-                # 1. CEK SAMPAH DI SELURUH KOLOM (Sangat Agresif)
-                # Jika ada angka 310000/320000 di mana pun dalam baris ini, HARUS DIHAPUS
-                for val in r:
-                    if isinstance(val, (int, float)) and val in [310000, 320000, 31000, 32000]:
-                        return True
-                    if isinstance(val, str) and str(val).strip() in ["310000", "320000", "310,000", "320,000"]:
-                        return True
                 
                 # 2. CEK LOGIKA NORMAL (Hanya jika tidak ada sampah)
                 if pd.isna(r[c_faktur]): return False
@@ -331,10 +360,11 @@ class CoreTaxApp(ctk.CTk):
                 
                 current_sum = 0
                 for cat in self.dynamic_categories.keys():
-                    val = pd.to_numeric(r[cat], errors='coerce')
-                    if not pd.isna(val): current_sum += val
+                    if cat in r:
+                        val = pd.to_numeric(r[cat], errors='coerce')
+                        if not pd.isna(val): current_sum += val
                 
-                selisih_val = r[c_selisih]
+                selisih_val = r[c_selisih] if (c_selisih and c_selisih in r) else None
                 is_reconciled = False
                 if not pd.isna(selisih_val):
                     try:
@@ -359,7 +389,7 @@ class CoreTaxApp(ctk.CTk):
             # TAHAP 1: HAPUS SEMUA TARGET DI EXCEL DULU
             self.add_log(f"[*] Tahap 1: Membersihkan {len(targets)} baris di Excel & Saving...")
             wb_clear = openpyxl.load_workbook(self.file_path)
-            ws_clear = wb_clear["PM"]
+            ws_clear = wb_clear[target_sheet_name]  # Dinamis: gunakan sheet yang terdeteksi
             for _, row in targets.iterrows():
                 ex_row = int(row['excel_row'])
                 for cat_name, (p_idx, q_idx) in self.dynamic_categories.items():
