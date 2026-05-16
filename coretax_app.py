@@ -118,8 +118,15 @@ class CoreTaxApp(ctk.CTk):
 
         ctk.CTkLabel(input_frame, text="MODE PROSES:").grid(row=1, column=0, padx=10, pady=5)
         self.mode_var = ctk.StringVar(value="AUTO-PROCESS (Clear & Fill)")
-        self.mode_menu = ctk.CTkOptionMenu(input_frame, values=["AUTO-PROCESS (Clear & Fill)", "ONLY-CLEAR (Hapus Saja)"], variable=self.mode_var)
+        self.mode_menu = ctk.CTkOptionMenu(input_frame, values=["AUTO-PROCESS (Clear & Fill)", "ONLY-CLEAR (Hapus Saja)", "CHECK-ONLY (PDF Saja)"], variable=self.mode_var)
         self.mode_menu.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
+
+        # Row 2: QUICK CHECK
+        ctk.CTkLabel(input_frame, text="CEK 1 FAKTUR:").grid(row=2, column=0, padx=10, pady=5)
+        self.entry_single_faktur = ctk.CTkEntry(input_frame, placeholder_text="Masukkan No Faktur...")
+        self.entry_single_faktur.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        self.btn_quick_check = ctk.CTkButton(input_frame, text="QUICK CHECK", width=100, command=self.quick_check, fg_color="orange", text_color="black")
+        self.btn_quick_check.grid(row=2, column=2, padx=10, pady=5)
         
         self.log_box = ctk.CTkTextbox(self, font=("Consolas", 12))
         self.log_box.grid(row=3, column=0, padx=20, pady=10, sticky="nsew")
@@ -231,6 +238,54 @@ class CoreTaxApp(ctk.CTk):
             if name.upper() in str(cell.value).upper():
                 return cell.column
         return None
+
+    def quick_check(self):
+        faktur = self.entry_single_faktur.get().strip()
+        if not faktur:
+            self.add_log("[!] Masukkan nomor faktur.")
+            return
+        
+        self.token = self.entry_token.get().strip()
+        self.cookie = self.entry_cookie.get().strip()
+        tid = self.entry_tid.get().strip()
+        
+        if not self.token or not self.cookie:
+            self.add_log("[!] Sesi belum ada. Silakan Login dulu.")
+            return
+
+        def run():
+            self.add_log(f"\n[QUICK CHECK] Memproses Faktur: {faktur}...")
+            # 1. RAW DATA (Cari Faktur)
+            headers = {"authority": "coretaxdjp.pajak.go.id", "authorization": f"Bearer {self.token}", "content-type": "application/json", "cookie": self.cookie, "x-dgt-code": "7AcAAA=="}
+            s_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/inputinvoice/list"
+            payload = {"BuyerTaxpayerAggregateIdentifier": tid, "TaxpayerAggregateIdentifier": tid, "First": 0, "Rows": 1, "LanguageId": "id-ID", "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": faktur, "MatchMode": "equals"}]}
+            
+            try:
+                resp = requests.post(s_url, headers=headers, json=payload, timeout=15).json()
+                data = resp.get("Payload", {}).get("Data", [])
+                if not data:
+                    self.add_log("   [!] Faktur tidak ditemukan.")
+                    return
+                
+                inv = data[0]
+                self.add_log("\n--- [RAW DATA DARI SERVER] ---")
+                self.add_log(json.dumps(inv, indent=2))
+                self.add_log("------------------------------\n")
+                
+                # 2. SYSTEM PARSING
+                self.add_log("[*] Mengekstrak isi PDF...")
+                items, msg = self._fetch_pdf_items(faktur, tid, 0) # 0 means ignore total mismatch for quick check
+                if items:
+                    self.add_log("\n--- [HASIL PARSING SISTEM] ---")
+                    for it in items:
+                        self.add_log(f" > {it['name']} | Qty: {it['qty']} | Total: {it['total']:,}")
+                    self.add_log("------------------------------\n")
+                else:
+                    self.add_log(f"   [!] Gagal Parsing: {msg}")
+            except Exception as e:
+                self.add_log(f"[!] Error Quick Check: {e}")
+
+        threading.Thread(target=run, daemon=True).start()
 
     def start_process(self):
         if not self.file_path:
@@ -344,12 +399,12 @@ class CoreTaxApp(ctk.CTk):
                 faktur = "{:.0f}".format(raw_f).zfill(17) if isinstance(raw_f, (float, int)) else str(raw_f).zfill(17)
                 
                 self.add_log(f"    - Scanning PDF (Baris {ex_row}): {faktur}")
-                items = self._fetch_pdf_items(faktur, tid, expected_total)
+                items, msg = self._fetch_pdf_items(faktur, tid, expected_total)
                 if items:
                     all_invoice_items[ex_row] = items
                     for it in items: unique_names.add(it['name'])
                 else:
-                    self.add_log("      [!] Gagal/Tidak cocok.")
+                    self.add_log(f"      [!] Gagal: {msg}")
 
             if not all_invoice_items:
                 self.add_log("[!] Scan selesai, namun tidak ada data PDF yang cocok untuk diisi.")
@@ -404,15 +459,18 @@ class CoreTaxApp(ctk.CTk):
         try:
             s_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/inputinvoice/list"
             payload = {"BuyerTaxpayerAggregateIdentifier": tid, "TaxpayerAggregateIdentifier": tid, "First": 0, "Rows": 1, "LanguageId": "id-ID", "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": no_faktur, "MatchMode": "equals"}]}
-            resp = requests.post(s_url, headers=headers, json=payload).json()
+            resp = requests.post(s_url, headers=headers, json=payload, timeout=15).json()
             data = resp.get("Payload", {}).get("Data", [])
-            if not data: return None
+            if not data: return None, "Faktur tidak ditemukan di server"
+            
             inv = data[0]
             d_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/DownloadInvoice/download-invoice-document"
             d_payload = {"EInvoiceRecordIdentifier": inv["RecordId"], "EInvoiceAggregateIdentifier": inv["AggregateIdentifier"], "DocumentAggregateIdentifier": inv["DocumentFormAggregateIdentifier"], "TaxpayerAggregateIdentifier": tid, "LetterNumber": no_faktur, "EInvoiceMenuType": "Input", "TaxInvoiceStatus": "APPROVED"}
-            d_resp = requests.post(d_url, headers=headers, json=d_payload).json()
-            pdf_bytes = base64.b64decode(d_resp["Content"])
+            d_resp = requests.post(d_url, headers=headers, json=d_payload, timeout=15).json()
+            pdf_b64 = d_resp.get("Content")
+            if not pdf_b64: return None, "Data PDF kosong dari server"
             
+            pdf_bytes = base64.b64decode(pdf_b64)
             extracted_items = []
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page in pdf.pages:
@@ -430,7 +488,11 @@ class CoreTaxApp(ctk.CTk):
                                 if val > 0: parsed_nums.append(val)
                             except: pass
                         if not parsed_nums: continue
-                        found_total = next((n for n in parsed_nums if abs(n - expected_total) < 100), None)
+                        
+                        # Logic: Jika expected_total=0 (Quick Check), ambil semua baris yang terlihat seperti item
+                        # Jika expected_total > 0, hanya ambil yang match.
+                        found_total = next((n for n in parsed_nums if expected_total == 0 or abs(n - expected_total) < 100), None)
+                        
                         if found_total:
                             qty = None
                             for n in parsed_nums:
@@ -438,22 +500,30 @@ class CoreTaxApp(ctk.CTk):
                                 for m in parsed_nums:
                                     if m == found_total: continue
                                     if abs(n * m - found_total) < (0.01 * found_total):
-                                        qty = min(n, m)
-                                        break
+                                        qty = min(n, m); break
                                 if qty: break
                             if qty is None:
                                 q_match = re.search(r'x\s+([\d.,]+)', row_text)
                                 if q_match:
                                     qs = q_match.group(1).replace('.', '').replace(',', '.')
                                     qty = float(qs)
-                            if qty:
-                                cells = [str(c) if c is not None else "" for c in row]
-                                raw_name = max(cells, key=len).strip()
-                                name = re.split(r'Rp|\sx\s|\n', raw_name)[0].strip()
-                                extracted_items.append({"name": name, "qty": qty, "total": found_total})
-                                return extracted_items
-            return None
-        except: return None
+                            
+                            # Fallback QTY=1 jika tidak ketemu x tapi total match
+                            if qty is None: qty = 1.0
+
+                            cells = [str(c) if c is not None else "" for c in row]
+                            raw_name = max(cells, key=len).strip()
+                            name = re.split(r'Rp|\sx\s|\n', raw_name)[0].strip()
+                            extracted_items.append({"name": name, "qty": qty, "total": found_total})
+                            
+                            # Jika bukan Quick Check, langsung return item pertama yang match total
+                            if expected_total > 0: return extracted_items, "Success"
+            
+            if expected_total == 0 and extracted_items:
+                return extracted_items, "Success"
+                
+            return None, "Harga total tidak ditemukan di dalam PDF"
+        except Exception as e: return None, str(e)
 
 if __name__ == "__main__":
     app = CoreTaxApp()
