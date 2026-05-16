@@ -56,54 +56,48 @@ class MappingWindow(ctk.CTkToplevel):
         self.btn_save.grid(row=2, column=0, padx=20, pady=20)
 
     def auto_map(self):
-        # Noise words universal (hanya untuk pembersihan dasar)
+        # Noise words universal untuk dibersihkan
         noise = ["MATERIAL", "SEBANYAK", "METER", "KUBIK", "UNIT", "PCS", "KG", "LITER", "LT", "SAK", "ZAK", "M3", "BANYAKNYA", "JASA", "PADA", "PCC"]
         
         for name, var in self.combo_vars.items():
-            real_cats = self.categories[1:] # Kategori dari Excel
+            real_cats = self.categories[1:] 
             u_name = name.upper()
             
-            # 1. Tokenisasi Nama Barang (Ambil kata-kata penting saja)
-            # Hapus angka dan simbol
-            clean_name = re.sub(r'[\d.,\-()/]+', ' ', u_name)
-            name_words = [w for w in clean_name.split() if len(w) >= 3 and w not in noise]
+            # 1. Bersihkan Nama Barang (Hapus angka, simbol, dan noise)
+            c_name = re.sub(r'[\d.,\-()/]+', ' ', u_name)
+            for n in noise: c_name = c_name.replace(n, "")
+            c_name = " ".join(c_name.split()) # Normalisasi spasi
             
             best_cat = "Abaikan"
             max_score = 0
             
             for cat in real_cats:
                 u_cat = cat.upper()
-                # Tokenisasi Kategori (Misal: "PRIME COAT" -> ["PRIME", "COAT"])
-                cat_words = [w for w in re.sub(r'[\d.,\-()/]+', ' ', u_cat).split() if len(w) >= 3]
+                # Bersihkan Kategori
+                c_cat = re.sub(r'[\d.,\-()/]+', ' ', u_cat)
+                for n in noise: c_cat = c_cat.replace(n, "")
+                c_cat = " ".join(c_cat.split())
                 
-                if not cat_words: continue
+                if not c_cat or not c_name: continue
                 
-                match_points = 0
+                # A. Logika Kecocokan Persen (Sesuai Request: 70%)
+                # SequenceMatcher menghitung kemiripan global
+                score = difflib.SequenceMatcher(None, c_name, c_cat).ratio()
+                
+                # B. Bonus jika satu kata kunci utama cocok 100%
+                # Misal: SEMEN ada di dalam SEMEN KOPLO
+                cat_words = c_cat.split()
+                name_words = c_name.split()
                 for cw in cat_words:
-                    # Cek apakah kata kategori ada di nama barang (Exact atau Fuzzy)
-                    # A. Exact Match dalam kata
-                    if any(cw == nw for nw in name_words):
-                        match_points += 2.0
-                    # B. Partial Match (Misal: OLI ada di dalam OLIENGGINE)
-                    elif any(cw in nw or nw in cw for nw in name_words):
-                        match_points += 1.0
-                    # C. Fuzzy Match (Misal: OIL vs OLI)
-                    else:
-                        matches = difflib.get_close_matches(cw, name_words, n=1, cutoff=0.7)
-                        if matches: match_points += 1.5
-
-                # Hitung skor akhir: Persentase kecocokan kata kategori
-                score = match_points / (len(cat_words) * 2)
-                
-                # Bonus jika nama kategori muncul utuh
-                if u_cat in u_name: score += 1.0
+                    if len(cw) >= 3 and cw in name_words:
+                        score += 0.2 # Bonus kecocokan kata
                 
                 if score > max_score:
                     max_score = score
                     best_cat = cat
 
-            # Threshold minimal untuk dianggap "Pintar"
-            if max_score >= 0.5:
+            # Threshold 0.7 (70%) seperti yang diminta user
+            if max_score >= 0.7:
                 var.set(best_cat)
             else:
                 var.set("Abaikan")
