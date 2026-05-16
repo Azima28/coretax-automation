@@ -403,10 +403,8 @@ class CoreTaxApp(ctk.CTk):
             
             self.add_log(f"[*] Memproses Sheet: {target_sheet_name}")
             ws = wb[target_sheet_name]
-            
-            # Konversi ke DataFrame untuk kemudahan filter
+                      # Konversi ke DataFrame dengan menyimpan NOMOR BARIS ASLI
             data_raw = list(ws.values)
-            # Cari baris header yang benar
             h_idx = 0
             for i, row in enumerate(data_raw):
                 row_str = [str(v).upper() if v else "" for v in row]
@@ -415,11 +413,16 @@ class CoreTaxApp(ctk.CTk):
                     break
             
             cols = data_raw[h_idx]
-            df = pd.DataFrame(data_raw[h_idx+1:], columns=cols)
-            # Bersihkan nama kolom dari spasi tersembunyi
-            df.columns = [str(c).strip() if c else f"COL_{i}" for i, c in enumerate(df.columns)]
-            headers = list(df.columns)
-
+            # Tambahkan kolom internal untuk melacak Row Excel Asli
+            rows_with_meta = []
+            for i, row in enumerate(data_raw[h_idx+1:]):
+                row_list = list(row)
+                row_list.append(i + h_idx + 2) # Ini nomor baris Excel asli (1-based)
+                rows_with_meta.append(row_list)
+            
+            headers = [str(c).strip() if c else f"COL_{i}" for i, c in enumerate(cols)]
+            df = pd.DataFrame(rows_with_meta, columns=headers + ["_EXCEL_ROW"])
+            
             self.dynamic_categories = {}
             blacklist = ["TOTAL", "DPP", "PPN", "JUMLAH PENJABARAN", "SELISIH", "QTY", "KET"]
             
@@ -437,77 +440,66 @@ class CoreTaxApp(ctk.CTk):
             # Ambil index kolom penting
             c_faktur = next((c for c in headers if "NOMOR FAKTUR" in str(c).upper()), None)
             c_harga  = next((c for c in headers if "HARGA JUAL" in str(c).upper()), None)
-            c_selisih = next((c for c in headers if "SELISIH" in str(c).upper()), None)
+            c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
             
-            if not c_faktur or not c_harga:
-                self.add_log("[!] ERROR: Kolom 'Nomor Faktur' atau 'Harga Jual' tidak ditemukan.")
+            if not c_faktur:
+                self.add_log("[!] ERROR: Kolom 'Nomor Faktur' tidak ditemukan.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
-            
-            c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
 
-            def is_not_positive(val):
-                if val is None: return True
-                s_val = str(val).strip()
-                if s_val == "" or s_val == "0" or s_val == "0.0": return True
-                # Jika diawali '=' berarti RUMUS, kita anggap "Belum Ada Isinya" 
-                # (nanti akan dicek lebih lanjut via has_any_real_entry)
-                if s_val.startswith("="): return True
-                try:
-                    f_val = float(s_val.replace(',',''))
-                    if f_val <= 0: return True
-                except: pass
+            def is_truly_empty(v):
+                if v is None or pd.isna(v): return True
+                s_v = str(v).strip().lower()
+                if s_v == "" or s_v == "0" or s_v == "0.0" or s_v == "nan": return True
                 return False
 
             def should_process(r):
                 if pd.isna(r[c_faktur]): return False
-                
-                def is_truly_empty(v):
-                    if v is None or pd.isna(v): return True
-                    s_v = str(v).strip().lower()
-                    if s_v == "" or s_v == "0" or s_v == "0.0" or s_v == "nan": return True
-                    return False
-
-                # 1. Cek Kategori Secara Mendalam
+                # 1. Cek Kolom Kategori (Apakah sudah ada isinya?)
                 has_any_real_entry = False
                 for cat in self.dynamic_categories.keys():
-                    if cat in r:
-                        val = r[cat]
-                        if not is_truly_empty(val) and not str(val).startswith("="):
-                            has_any_real_entry = True
-                            break
+                    if not is_truly_empty(r[cat]):
+                        has_any_real_entry = True
+                        break
+                
+                # 2. Cek Penjabaran
+                pj = r[c_penjabaran]
+                # Jika kategori sudah ada isi -> SKIP (Sudah dikerjakan)
+                if has_any_real_entry: return False
+                
+                # Jika kategori kosong, kita cek penjabaran. 
+                # Jika penjabaran > 0 (BUKAN formula/nol), berarti SUDAH ada isi manual -> SKIP
+                if pj is not None:
+                    s_pj = str(pj).strip()
+                    if s_pj.startswith("="): return True # Formula & Kategori kosong -> TARGET
+                    try:
+                        f_pj = float(s_pj.replace(",",""))
+                        if f_pj > 0: return False # Ada angka manual > 0 -> SKIP
+                    except: pass
+                
+                return True # Memenuhi syarat target
 
-                # 2. ATURAN EMAS: Cek Kolom Penjabaran (AW)
-                pj = r[c_penjabaran] if c_penjabaran else None
-                
-                # Jika Penjabaran KOSONG atau <= 0 atau RUMUS (tanpa isi kategori) -> PROSES
-                if is_not_positive(pj):
-                    if str(pj).startswith("=") and has_any_real_entry:
-                        return False
-                    return True
-                
-                return False
+            targets = df[df.apply(should_process, axis=1)]
             
-            targets = df[df.apply(should_process, axis=1)].copy()
-            targets['excel_row'] = targets.index + h_idx + 2
-            self.add_log(f"[+] Ditemukan {len(targets)} faktur untuk diproses.")
-            
-            if len(targets) == 0:
-                self.add_log("[!] Tidak ada faktur yang perlu diproses. Selesai.")
+            if targets.empty:
+                self.add_log("[√] Seluruh baris target sudah BERSIH.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
+            else:
+                self.add_log(f"[+] Ditemukan {len(targets)} baris baru untuk diproses.")
 
             # TAHAP 1: HAPUS SEMUA TARGET DI EXCEL DULU
-            self.add_log(f"[*] Tahap 1: Membersihkan {len(targets)} baris di Excel & Saving...")
-            wb_clear = openpyxl.load_workbook(self.file_path)
-            ws_clear = wb_clear[target_sheet_name]  # Dinamis: gunakan sheet yang terdeteksi
-            for _, row in targets.iterrows():
-                ex_row = int(row['excel_row'])
-                for cat_name, (p_idx, q_idx) in self.dynamic_categories.items():
-                    ws_clear.cell(row=ex_row, column=p_idx).value = None
-                    ws_clear.cell(row=ex_row, column=q_idx).value = None
-            wb_clear.save(self.file_path)
-            self.add_log("[√] Seluruh baris target sudah BERSIH.")
+            if self.mode_var.get() != "CHECK-ONLY (PDF Saja)":
+                self.add_log(f"[*] Tahap 1: Membersihkan {len(targets)} baris di Excel & Saving...")
+                wb_clear = openpyxl.load_workbook(self.file_path)
+                ws_clear = wb_clear[target_sheet_name]
+                for _, row in targets.iterrows():
+                    ex_row = int(row["_EXCEL_ROW"])
+                    for cat_name, (p_idx, q_idx) in self.dynamic_categories.items():
+                        ws_clear.cell(row=ex_row, column=p_idx).value = None
+                        ws_clear.cell(row=ex_row, column=q_idx).value = None
+                wb_clear.save(self.file_path)
+                self.add_log("[√] Seluruh baris target sudah BERSIH.")
 
             if self.mode_var.get() == "ONLY-CLEAR (Hapus Saja)":
                 self.btn_run.configure(state="normal", text="START PROCESS")
@@ -521,15 +513,14 @@ class CoreTaxApp(ctk.CTk):
             for index, row in targets.iterrows():
                 raw_f = row[c_faktur]
                 expected_total = pd.to_numeric(row[c_harga], errors='coerce')
-                ex_row = int(row['excel_row'])
+                ex_row = int(row["_EXCEL_ROW"])
                 faktur = "{:.0f}".format(raw_f).zfill(17) if isinstance(raw_f, (float, int)) else str(raw_f).zfill(17)
                 
                 self.add_log(f"    - Scanning PDF Baris {ex_row}: {faktur}")
                 items, msg, raw_json = self._fetch_pdf_items(faktur, tid, expected_total)
                 if items:
                     self.add_log(f"--- [RAW DATA DARI SERVER: {faktur}] ---")
-                    self.add_log(json.dumps(raw_json, indent=2))
-                    self.add_log(f"--- [HASIL PARSING SISTEM] ---")
+                    # self.add_log(json.dumps(raw_json, indent=2)) # Matikan log mentah biar bersih
                     all_invoice_data[ex_row] = items
                     for it in items: 
                         all_unique_names.add(it['name'])
@@ -542,32 +533,7 @@ class CoreTaxApp(ctk.CTk):
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            # TAHAP 3: GLOBAL MAPPING (Smart Grouping)
-            self.add_log(f"[*] Tahap 3: Meringkas {len(all_unique_names)} barang menjadi kelompok unik...")
-            
-            # Algoritma Pembersihan Agresif (Anchor Grouping)
-            def get_core_identity(name):
-                n = str(name).upper().strip()
-                # 1. Hapus Satuan & Angka Dulu
-                n = re.sub(r'\b(METER KUBIK|METER|KUBIK|UNIT|PCS|KG|LITER|SAK|ZAK|LTR|UNIT|BOX|ROLL|BTG|LBR|CURAH|JB)\b', ' ', n)
-                n = re.sub(r'[\d.,\-()/xX*]+', ' ', n)
-                words = n.split()
-                if not words: return name.upper()
-                
-                # 2. Logika Anchor (Jika diawali kata kunci, ambil depannya saja)
-                anchors = ["JASA", "SERVICE", "SP", "SMN", "GT", "WL", "R", "C", "MATERIAL", "ULTRAPRO", "SOLAR", "BIOSOLAR", "SPLIT", "SCREENING", "ABU"]
-                first_word = words[0]
-                
-                if first_word in anchors:
-                    if first_word in ["JASA", "SP", "SMN", "MATERIAL", "ULTRAPRO", "SOLAR", "BIOSOLAR", "ABU"]:
-                        return first_word
-                    return " ".join(words[:2])
-                
-                return " ".join(words[:2])
-
             # TAHAP 3: GLOBAL MAPPING (Dynamic Grouping)
-            self.add_log(f"[*] Tahap 3: Men-scan {len(all_unique_names)} barang unik dari PDF...")
-            
             self.add_log(f"[?] Menunggu validasi mapping untuk {len(all_unique_names)} barang (ASLI)...")
             mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
             self.wait_window(mapping_window)
@@ -586,14 +552,11 @@ class CoreTaxApp(ctk.CTk):
             success_count = 0
             
             for ex_row, items in all_invoice_data.items():
-                self.add_log(f"   -> Memproses Baris {ex_row}...")
-                
                 # Akumulasi berdasarkan kategori hasil mapping
                 category_totals = {} # {Category: {'qty': 0, 'total': 0}}
                 
                 for it in items:
                     cat = final_mapping.get(it['name'])
-                    
                     if cat and cat != "Abaikan":
                         if cat not in category_totals: category_totals[cat] = {'qty': 0, 'total': 0}
                         category_totals[cat]['qty'] += it['qty']
@@ -607,7 +570,17 @@ class CoreTaxApp(ctk.CTk):
                         ws.cell(row=ex_row, column=p_idx).number_format = '#,##0'
                         ws.cell(row=ex_row, column=q_idx).value = val['qty']
                         ws.cell(row=ex_row, column=q_idx).number_format = '#,##0.00'
-                        self.add_log(f"      [√] {cat}: Total Harga={val['total']:,}, Total Qty={val['qty']}")
+                        self.add_log(f"      [√] Baris {ex_row} | {cat}: Total={val['total']:,}")
+
+                # [TAMBAHAN] Tulis Rumus Penjabaran Otomatis
+                cat_cols = [p for p, q in self.dynamic_categories.values()]
+                if cat_cols:
+                    min_l = openpyxl.utils.get_column_letter(min(cat_cols))
+                    max_l = openpyxl.utils.get_column_letter(max(cat_cols))
+                    pj_idx = self._get_col_idx(ws, "PENJABARAN")
+                    if pj_idx:
+                        ws.cell(row=ex_row, column=pj_idx).value = f"=SUM({min_l}{ex_row}:{max_l}{ex_row})"
+                        ws.cell(row=ex_row, column=pj_idx).number_format = '#,##0'
 
                 # Update Selisih
                 diff_idx = self._get_col_idx(ws, "Selisih")
