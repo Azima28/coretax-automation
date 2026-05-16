@@ -548,12 +548,18 @@ class CoreTaxApp(ctk.CTk):
                 if core not in grouped_map: grouped_map[core] = []
                 grouped_map[core].append(orig)
             
-            # Tampilkan Mapping Window dengan info jumlah item agar transparan
-            display_names = [f"{core} ({len(items)} item)" for core, items in grouped_map.items()]
-            # Mapping balik dari display_name ke core_name untuk memproses hasil
-            display_to_core = {f"{core} ({len(items)} item)": core for core, items in grouped_map.items()}
+            # Tampilkan Mapping Window dengan Nama Lengkap Perwakilan agar transparan
+            display_map = {} # {display_name: core_name}
+            display_list = []
             
-            mapping_window = MappingWindow(self, display_names, list(self.dynamic_categories.keys()))
+            for core, originals in grouped_map.items():
+                rep_name = originals[0] # Ambil nama lengkap pertama sebagai perwakilan
+                count = len(originals)
+                d_name = f"{rep_name} (+{count-1} lainnya)" if count > 1 else rep_name
+                display_list.append(d_name)
+                display_map[d_name] = core
+            
+            mapping_window = MappingWindow(self, display_list, list(self.dynamic_categories.keys()))
             self.wait_window(mapping_window)
             display_mapping_result = mapping_window.result
             
@@ -562,10 +568,10 @@ class CoreTaxApp(ctk.CTk):
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
             
-            # Balikkan dari display_name ke Original Names
+            # Balikkan ke Original Names
             final_mapping = {}
             for d_name, category in display_mapping_result.items():
-                core = display_to_core[d_name]
+                core = display_map[d_name]
                 for orig in grouped_map[core]:
                     final_mapping[orig] = category
 
