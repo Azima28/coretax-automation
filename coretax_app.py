@@ -56,6 +56,66 @@ class AboutWindow(ctk.CTkToplevel):
         
         ctk.CTkButton(self, text="Tutup", command=self.destroy, width=100).pack(pady=20)
 
+class iOSConfirmDialog(ctk.CTkToplevel):
+    def __init__(self, parent, title, message):
+        super().__init__(parent)
+        self.title("")
+        self.geometry("340x260")
+        
+        # Windows transparent corners hack
+        if os.name == 'nt':
+            self.configure(fg_color="#000001")
+            self.attributes("-transparentcolor", "#000001")
+        else:
+            self.configure(fg_color="transparent")
+            
+        self.overrideredirect(True)
+        self.transient(parent)
+        self.grab_set()
+        
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() // 2) - (340 // 2)
+        y = parent.winfo_rooty() + (parent.winfo_height() // 2) - (260 // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        self.result = False
+        
+        main_frame = ctk.CTkFrame(self, fg_color="#1C1C1E", corner_radius=15, border_width=1, border_color="#38383A")
+        main_frame.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        ctk.CTkLabel(main_frame, text=title, font=("Segoe UI", 16, "bold"), text_color="#FFFFFF").pack(pady=(20, 5))
+        ctk.CTkLabel(main_frame, text=message, font=("Segoe UI", 13), text_color="#8E8E93", justify="center", wraplength=300).pack(pady=(0, 15), padx=20, expand=True)
+        
+        btn_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=15, pady=(0, 15))
+        btn_frame.grid_columnconfigure((0, 1), weight=1)
+        
+        btn_no = ctk.CTkButton(btn_frame, text="No", font=("Segoe UI", 15, "bold"), fg_color="#2C2C2E", text_color="#0A84FF", hover_color="#3A3A3C", corner_radius=8, height=40, command=self.on_no)
+        btn_no.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        
+        btn_yes = ctk.CTkButton(btn_frame, text="Yes", font=("Segoe UI", 15, "bold"), fg_color="#FF3B30", text_color="#FFFFFF", hover_color="#FF453A", corner_radius=8, height=40, command=self.on_yes)
+        btn_yes.grid(row=0, column=1, sticky="ew", padx=(5, 0))
+        
+        # Focus management agar selalu di atas window utama tapi tidak menimpa aplikasi lain
+        def on_focus_in(e): self.attributes("-topmost", True)
+        def on_focus_out(e): self.attributes("-topmost", False)
+        
+        self.bind("<FocusIn>", on_focus_in)
+        self.bind("<FocusOut>", on_focus_out)
+        parent.bind("<FocusIn>", on_focus_in, add="+")
+        
+    def on_yes(self):
+        self.result = True
+        self.grab_release()
+        self.master.grab_set()
+        self.destroy()
+        
+    def on_no(self):
+        self.result = False
+        self.grab_release()
+        self.master.grab_set()
+        self.destroy()
+
 class MappingWindow(ctk.CTkToplevel):
     def __init__(self, parent, all_names, categories):
         super().__init__(parent)
@@ -169,6 +229,25 @@ class MappingWindow(ctk.CTkToplevel):
                 var.set(jasa_cat)
 
     def save_mapping(self):
+        abaikan_items = []
+        for name, var in self.combo_vars.items():
+            if var.get() == "Abaikan":
+                abaikan_items.append(name)
+                
+        if abaikan_items:
+            items_str = "\n".join(f"- {item}" for item in abaikan_items[:4])
+            if len(abaikan_items) > 4:
+                items_str += f"\n... dan {len(abaikan_items) - 4} lainnya."
+                
+            dialog = iOSConfirmDialog(
+                self,
+                "Abaikan Barang",
+                f"Barang berikut akan diabaikan:\n{items_str}\n\nApakah Anda yakin untuk melanjutkan?"
+            )
+            self.wait_window(dialog)
+            if not dialog.result:
+                return
+
         # Jika sudah di-group, sebar hasil mapping ke semua nama asli
         if hasattr(self, 'final_group_map'):
             for core_name, var in self.combo_vars.items():
@@ -375,7 +454,22 @@ class CoreTaxApp(ctk.CTk):
             with sync_playwright() as p:
                 # Tambahkan user agent asli agar tidak diblokir
                 user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                browser = p.chromium.launch(headless=False)
+                
+                # Gunakan Chrome asli bawaan Windows untuk bypass blokir Antivirus & WAF DJP
+                launch_args = [
+                    "--disable-blink-features=AutomationControlled",
+                    "--ignore-certificate-errors"
+                ]
+                
+                try:
+                    browser = p.chromium.launch(headless=False, channel="chrome", args=launch_args)
+                except Exception:
+                    # Fallback ke Edge atau Chromium bawaan jika Chrome tidak terinstall
+                    try:
+                        browser = p.chromium.launch(headless=False, channel="msedge", args=launch_args)
+                    except Exception:
+                        browser = p.chromium.launch(headless=False, args=launch_args)
+                        
                 context = browser.new_context(user_agent=user_agent)
                 page = context.new_page()
                 
@@ -426,7 +520,15 @@ class CoreTaxApp(ctk.CTk):
                     
                     time.sleep(1)
         except Exception as e:
-            self.add_log(f"[!] Browser Error: {e}")
+            err_msg = str(e).upper()
+            if "ERR_INTERNET_DISCONNECTED" in err_msg or "ERR_NAME_NOT_RESOLVED" in err_msg:
+                self.add_log("[!] KONEKSI INTERNET MATI: Pastikan komputer Anda terhubung ke jaringan internet.")
+            elif "ERR_CONNECTION_TIMED_OUT" in err_msg or "TIMEOUT" in err_msg:
+                self.add_log("[!] KONEKSI TIMEOUT: Server CoreTax DJP lambat merespon atau sedang down.")
+            elif "ERR_CONNECTION_RESET" in err_msg:
+                self.add_log("[!] KONEKSI DIPUTUS (RESET): Akses diblokir oleh Firewall/Antivirus Anda atau server DJP sedang padat.")
+            else:
+                self.add_log(f"[!] Browser Error: {e}")
         finally:
             self.after(0, lambda: self.btn_login.configure(state="normal", text="LOGIN CORETAX"))
             self.add_log("[*] Browser ditutup.")
@@ -671,7 +773,12 @@ class CoreTaxApp(ctk.CTk):
                     return None, f"Total PDF ({sum_pdf:,}) tidak sinkron dengan Excel ({expected_total:,})", inv
 
             return extracted_items, "Success", inv
-        except Exception as e: return None, str(e), None
+        except requests.exceptions.ConnectionError:
+            return None, "Jaringan terputus atau server DJP sedang offline.", None
+        except requests.exceptions.Timeout:
+            return None, "Koneksi TIMEOUT: Server DJP lambat merespon (batas 15 detik).", None
+        except Exception as e:
+            return None, str(e), None
 
     def _process_single_sheet(self, wb, target_sheet_name, jenis_pajak, tid):
         try:
@@ -809,15 +916,18 @@ class CoreTaxApp(ctk.CTk):
                         category_totals[cat]['qty'] += it['qty']
                         category_totals[cat]['total'] += it['total']
                 
-                for cat, val in category_totals.items():
-                    if cat in self.dynamic_categories:
-                        p_idx, q_idx = self.dynamic_categories[cat]
-                        ws.cell(row=ex_row, column=p_idx).value = val['total']
-                        ws.cell(row=ex_row, column=p_idx).number_format = '#,##0'
-                        ws.cell(row=ex_row, column=q_idx).value = val['qty']
-                        ws.cell(row=ex_row, column=q_idx).number_format = '#,##0.00'
-                        self.add_log(f"      [√] Baris {ex_row} | {cat}: Total={val['total']:,}")
-
+                if not category_totals:
+                    self.add_log(f"      [!] Baris {ex_row} | Semua item diabaikan (Tidak masuk rekap).")
+                else:
+                    for cat, val in category_totals.items():
+                        if cat in self.dynamic_categories:
+                            p_idx, q_idx = self.dynamic_categories[cat]
+                            ws.cell(row=ex_row, column=p_idx).value = val['total']
+                            ws.cell(row=ex_row, column=p_idx).number_format = '#,##0'
+                            ws.cell(row=ex_row, column=q_idx).value = val['qty']
+                            ws.cell(row=ex_row, column=q_idx).number_format = '#,##0.00'
+                            self.add_log(f"      [√] Baris {ex_row} | {cat}: Total={val['total']:,}")
+                            
                 cat_cols = [p for p, q in self.dynamic_categories.values()]
                 if cat_cols:
                     min_l = openpyxl.utils.get_column_letter(min(cat_cols))
