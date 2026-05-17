@@ -95,11 +95,9 @@ class MappingWindow(ctk.CTkToplevel):
             "BBM": ["SOLAR", "HSD", "BBM", "BIOSOLAR", "DEXLITE"],
             "BESI": ["BESI", "STEEL", "WIRE", "MESH", "PLATE", "UNP", "CNP"],
             "JASA ANGKUTAN": ["ANGKUTAN", "TRANSPORT", "CARGO", "EKSPEDISI", "TRUCKING"],
-            "SEWA": ["SEWA", "RENTAL", "RENT", "SEWA ALAT", "ALAT BERAT", "EXCAVATOR", "DUMP TRUCK"],
+            "SEWA": ["SEWA", "RENTAL", "RENT"],
             "SPLIT": ["SPLIT", "BATU SPLIT"],
-            "SCREENING": ["SCREENING", "ABU BATU", "ABU"],
-            "BETON": ["BETON", "READY MIX"],
-            "HOTMIX": ["HOTMIX", "ASPAL", "ASPHALT"]
+            "SCREENING": ["SCREENING", "ABU BATU", "ABU"]
         }
         
         for name, var in self.combo_vars.items():
@@ -198,22 +196,17 @@ class CoreTaxApp(ctk.CTk):
         self.entry_file.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         ctk.CTkButton(input_frame, text="BROWSE", width=100, command=self.browse_file).grid(row=0, column=2, padx=10, pady=10)
 
-        ctk.CTkLabel(input_frame, text="TARGET SHEET:").grid(row=1, column=0, padx=10, pady=5)
-        self.sheet_var = ctk.StringVar(value="Hanya PM (Pajak Masukan)")
-        self.sheet_menu = ctk.CTkOptionMenu(input_frame, values=["Hanya PM (Pajak Masukan)", "Hanya PK (Pajak Keluaran)", "Keduanya (PK & PM)"], variable=self.sheet_var)
-        self.sheet_menu.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
-
-        ctk.CTkLabel(input_frame, text="MODE PROSES:").grid(row=2, column=0, padx=10, pady=5)
+        ctk.CTkLabel(input_frame, text="MODE PROSES:").grid(row=1, column=0, padx=10, pady=5)
         self.mode_var = ctk.StringVar(value="AUTO-PROCESS (Clear & Fill)")
         self.mode_menu = ctk.CTkOptionMenu(input_frame, values=["AUTO-PROCESS (Clear & Fill)", "ONLY-CLEAR (Hapus Saja)", "CHECK-ONLY (PDF Saja)"], variable=self.mode_var)
-        self.mode_menu.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
+        self.mode_menu.grid(row=1, column=1, padx=10, pady=5, sticky="ew")
 
-        # Row 3: QUICK CHECK
-        ctk.CTkLabel(input_frame, text="CEK 1 FAKTUR:").grid(row=3, column=0, padx=10, pady=5)
+        # Row 2: QUICK CHECK
+        ctk.CTkLabel(input_frame, text="CEK 1 FAKTUR:").grid(row=2, column=0, padx=10, pady=5)
         self.entry_single_faktur = ctk.CTkEntry(input_frame, placeholder_text="Masukkan No Faktur...")
-        self.entry_single_faktur.grid(row=3, column=1, padx=10, pady=5, sticky="ew")
+        self.entry_single_faktur.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
         self.btn_quick_check = ctk.CTkButton(input_frame, text="QUICK CHECK", width=100, command=self.quick_check, fg_color="orange", text_color="black")
-        self.btn_quick_check.grid(row=3, column=2, padx=10, pady=5)
+        self.btn_quick_check.grid(row=2, column=2, padx=10, pady=5)
         
         self.log_box = ctk.CTkTextbox(self, font=("Consolas", 12))
         self.log_box.grid(row=3, column=0, padx=20, pady=10, sticky="nsew")
@@ -345,9 +338,8 @@ class CoreTaxApp(ctk.CTk):
             # 1. RAW DATA (Cari Faktur)
             
             # 2. SYSTEM PARSING
-            jenis = "PK" if "PK" in self.sheet_var.get() and "PM" not in self.sheet_var.get() else "PM"
-            self.add_log(f"[*] Mengekstrak isi PDF sebagai {jenis}...")
-            items, msg, inv = self._fetch_pdf_items(faktur, tid, 0, jenis)
+            self.add_log("[*] Mengekstrak isi PDF...")
+            items, msg, inv = self._fetch_pdf_items(faktur, tid, 0)
             
             if items:
                 self.add_log(f"--- [RAW DATA DARI SERVER] ---")
@@ -385,74 +377,226 @@ class CoreTaxApp(ctk.CTk):
                 
             wb = openpyxl.load_workbook(self.file_path)
             
-            sheet_mode = self.sheet_var.get()
-            sheet_targets = []
-            if "PM" in sheet_mode: sheet_targets.append("PM")
-            if "PK" in sheet_mode: sheet_targets.append("PK")
-
-            sheets_to_process = []
-            for target_jenis in sheet_targets:
-                found_sheet = None
-                for sn in wb.sheetnames:
-                    if sn.upper() == target_jenis:
-                        found_sheet = sn
-                        break
-                if not found_sheet:
-                    for sn in wb.sheetnames:
-                        if target_jenis in sn.upper():
-                            found_sheet = sn
+            # 1. CARI SHEET YANG RELEVAN (Prioritaskan PM jika ada)
+            target_sheet_name = None
+            # Cek dulu apakah ada sheet dengan nama mengandung 'PM'
+            pm_sheets = [sn for sn in wb.sheetnames if "PM" in sn.upper()]
+            other_sheets = [sn for sn in wb.sheetnames if "PM" not in sn.upper()]
+            
+            for sn in (pm_sheets + other_sheets): # Prioritaskan PM
+                ws_temp = wb[sn]
+                found_header = False
+                for r in range(1, 15):
+                    try:
+                        row_vals = [str(cell.value).upper() if cell.value else "" for cell in ws_temp[r]]
+                        if any("NOMOR FAKTUR" in v for v in row_vals):
+                            target_sheet_name = sn
+                            found_header = True
                             break
-                if found_sheet:
-                    sheets_to_process.append((found_sheet, target_jenis))
-                else:
-                    self.add_log(f"[!] Peringatan: Sheet untuk {target_jenis} tidak ditemukan.")
-
-            if not sheets_to_process:
-                self.add_log("[!] ERROR: Tidak menemukan sheet target yang sesuai.")
+                    except: pass
+                if found_header: break
+            
+            if not target_sheet_name:
+                self.add_log("[!] ERROR: Tidak menemukan kolom 'Nomor Faktur' di sheet manapun.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+            
+            self.add_log(f"[*] Memproses Sheet: {target_sheet_name}")
+            ws = wb[target_sheet_name]
+                      # Konversi ke DataFrame dengan menyimpan NOMOR BARIS ASLI
+            data_raw = list(ws.values)
+            h_idx = 0
+            for i, row in enumerate(data_raw):
+                row_str = [str(v).upper() if v else "" for v in row]
+                if any("NOMOR FAKTUR" in v for v in row_str):
+                    h_idx = i
+                    break
+            
+            cols = data_raw[h_idx]
+            # Tambahkan kolom internal untuk melacak Row Excel Asli
+            rows_with_meta = []
+            for i, row in enumerate(data_raw[h_idx+1:]):
+                row_list = list(row)
+                row_list.append(i + h_idx + 2) # Ini nomor baris Excel asli (1-based)
+                rows_with_meta.append(row_list)
+            
+            headers = [str(c).strip() if c else f"COL_{i}" for i, c in enumerate(cols)]
+            df = pd.DataFrame(rows_with_meta, columns=headers + ["_EXCEL_ROW"])
+            
+            self.dynamic_categories = {}
+            blacklist = ["TOTAL", "DPP", "PPN", "JUMLAH PENJABARAN", "SELISIH", "QTY", "KET"]
+            
+            for i, col in enumerate(headers):
+                col_str = str(col).strip().upper()
+                if "QTY" in col_str:
+                    if i + 1 < len(headers):
+                        raw_cat = str(headers[i+1]).strip()
+                        is_blacklisted = any(b in raw_cat.upper() for b in blacklist)
+                        if not is_blacklisted and raw_cat:
+                            self.dynamic_categories[raw_cat] = (i+2, i+1) # (HargaCol, QtyCol)
+            
+            self.add_log(f"[+] Kategori terdeteksi: {', '.join(self.dynamic_categories.keys())}")
+            
+            # Ambil index kolom penting
+            c_faktur = next((c for c in headers if "NOMOR FAKTUR" in str(c).upper()), None)
+            c_harga  = next((c for c in headers if "HARGA JUAL" in str(c).upper()), None)
+            c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
+            
+            if not c_faktur:
+                self.add_log("[!] ERROR: Kolom 'Nomor Faktur' tidak ditemukan.")
                 self.btn_run.configure(state="normal", text="START PROCESS")
                 return
 
-            total_success = 0
-            for target_sheet_name, jenis_pajak in sheets_to_process:
-                self.add_log(f"\n{'='*40}\n[*] MEMULAI PEMROSESAN SHEET: {target_sheet_name} ({jenis_pajak})\n{'='*40}")
-                success = self._process_single_sheet(wb, target_sheet_name, jenis_pajak, tid)
-                total_success += success
+            def is_truly_empty(v):
+                if v is None or pd.isna(v): return True
+                s_v = str(v).strip().lower()
+                if s_v == "" or s_v == "0" or s_v == "0.0" or s_v == "nan": return True
+                return False
+
+            def should_process(r):
+                if pd.isna(r[c_faktur]): return False
+                # 1. Cek Kolom Kategori (Apakah sudah ada isinya?)
+                has_any_real_entry = False
+                for cat in self.dynamic_categories.keys():
+                    if not is_truly_empty(r[cat]):
+                        has_any_real_entry = True
+                        break
+                
+                # 2. Cek Penjabaran
+                pj = r[c_penjabaran]
+                # Jika kategori sudah ada isi -> SKIP (Sudah dikerjakan)
+                if has_any_real_entry: return False
+                
+                # Jika kategori kosong, kita cek penjabaran. 
+                # Jika penjabaran > 0 (BUKAN formula/nol), berarti SUDAH ada isi manual -> SKIP
+                if pj is not None:
+                    s_pj = str(pj).strip()
+                    if s_pj.startswith("="): return True # Formula & Kategori kosong -> TARGET
+                    try:
+                        f_pj = float(s_pj.replace(",",""))
+                        if f_pj > 0: return False # Ada angka manual > 0 -> SKIP
+                    except: pass
+                
+                return True # Memenuhi syarat target
+
+            targets = df[df.apply(should_process, axis=1)]
             
-            if total_success > 0 or self.mode_var.get() == "ONLY-CLEAR (Hapus Saja)":
-                wb.save(self.file_path)
+            if targets.empty:
+                self.add_log("[√] Seluruh baris target sudah BERSIH.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+            else:
+                self.add_log(f"[+] Ditemukan {len(targets)} baris baru untuk diproses.")
+
+            # TAHAP 1: HAPUS SEMUA TARGET DI EXCEL DULU
+            if self.mode_var.get() != "CHECK-ONLY (PDF Saja)":
+                self.add_log(f"[*] Tahap 1: Membersihkan {len(targets)} baris di Excel & Saving...")
+                wb_clear = openpyxl.load_workbook(self.file_path)
+                ws_clear = wb_clear[target_sheet_name]
+                for _, row in targets.iterrows():
+                    ex_row = int(row["_EXCEL_ROW"])
+                    for cat_name, (p_idx, q_idx) in self.dynamic_categories.items():
+                        ws_clear.cell(row=ex_row, column=p_idx).value = None
+                        ws_clear.cell(row=ex_row, column=q_idx).value = None
+                wb_clear.save(self.file_path)
+                self.add_log("[√] Seluruh baris target sudah BERSIH.")
+
+            if self.mode_var.get() == "ONLY-CLEAR (Hapus Saja)":
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+
+            # TAHAP 2: GLOBAL SCAN (Semua Faktur)
+            all_invoice_data = {} # {ex_row: [items]}
+            all_unique_names = set()
             
-            self.add_log(f"\n[√] SELESAI: {total_success} faktur berhasil diproses dari semua sheet.")
+            self.add_log("[*] Tahap 2: Men-scan SELURUH PDF (Global Scan)...")
+            for index, row in targets.iterrows():
+                raw_f = row[c_faktur]
+                expected_total = pd.to_numeric(row[c_harga], errors='coerce')
+                ex_row = int(row["_EXCEL_ROW"])
+                faktur = "{:.0f}".format(raw_f).zfill(17) if isinstance(raw_f, (float, int)) else str(raw_f).zfill(17)
+                
+                self.add_log(f"    - Scanning PDF Baris {ex_row}: {faktur}")
+                items, msg, raw_json = self._fetch_pdf_items(faktur, tid, expected_total)
+                if items:
+                    self.add_log(f"--- [RAW DATA DARI SERVER: {faktur}] ---")
+                    # self.add_log(json.dumps(raw_json, indent=2)) # Matikan log mentah biar bersih
+                    all_invoice_data[ex_row] = items
+                    for it in items: 
+                        all_unique_names.add(it['name'])
+                        self.add_log(f"      > Item: {it['name']} | Qty: {it['qty']} | Total: {it['total']:,}")
+                else:
+                    self.add_log(f"      [!] Skip: {msg}")
+
+            if not all_invoice_data:
+                self.add_log("[!] Scan selesai, tidak ada data yang ditemukan.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+
+            # TAHAP 3: GLOBAL MAPPING (Dynamic Grouping)
+            self.add_log(f"[?] Menunggu validasi mapping untuk {len(all_unique_names)} barang (ASLI)...")
+            mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
+            self.wait_window(mapping_window)
+            
+            final_mapping = mapping_window.result # {original_name: category}
+            
+            if not final_mapping:
+                self.add_log("[!] Mapping dibatalkan.")
+                self.btn_run.configure(state="normal", text="START PROCESS")
+                return
+
+            # TAHAP 4: ISI DATA DENGAN AKUMULASI
+            self.add_log("[*] Tahap 4: Mengisi data dengan Logika Akumulasi...")
+            wb = openpyxl.load_workbook(self.file_path)
+            ws = wb[target_sheet_name]
+            success_count = 0
+            
+            for ex_row, items in all_invoice_data.items():
+                # Akumulasi berdasarkan kategori hasil mapping
+                category_totals = {} # {Category: {'qty': 0, 'total': 0}}
+                
+                for it in items:
+                    cat = final_mapping.get(it['name'])
+                    if cat and cat != "Abaikan":
+                        if cat not in category_totals: category_totals[cat] = {'qty': 0, 'total': 0}
+                        category_totals[cat]['qty'] += it['qty']
+                        category_totals[cat]['total'] += it['total']
+                
+                # Tulis hasil akumulasi ke Excel
+                for cat, val in category_totals.items():
+                    if cat in self.dynamic_categories:
+                        p_idx, q_idx = self.dynamic_categories[cat]
+                        ws.cell(row=ex_row, column=p_idx).value = val['total']
+                        ws.cell(row=ex_row, column=p_idx).number_format = '#,##0'
+                        ws.cell(row=ex_row, column=q_idx).value = val['qty']
+                        ws.cell(row=ex_row, column=q_idx).number_format = '#,##0.00'
+                        self.add_log(f"      [√] Baris {ex_row} | {cat}: Total={val['total']:,}")
+
+                # Update Selisih
+                diff_idx = self._get_col_idx(ws, "Selisih")
+                if diff_idx: ws.cell(row=ex_row, column=diff_idx).value = "-"
+                success_count += 1
+
+            wb.save(self.file_path)
+            self.add_log(f"[√] SELESAI: {success_count} faktur berhasil diproses secara batch.")
             self.btn_run.configure(state="normal", text="START PROCESS")
+            
         except Exception as e:
             self.add_log(f"[!] ERROR: {str(e)}")
             self.btn_run.configure(state="normal", text="START AUTO-CHECK")
 
-    def _fetch_pdf_items(self, no_faktur, tid, expected_total, jenis_pajak="PM"):
+    def _fetch_pdf_items(self, no_faktur, tid, expected_total):
         headers = {"authority": "coretaxdjp.pajak.go.id", "authorization": f"Bearer {self.token}", "content-type": "application/json", "cookie": self.cookie, "x-dgt-code": "7AcAAA=="}
         try:
-            is_pk = (jenis_pajak == "PK")
-            api_endpoint = "outputinvoice/list" if is_pk else "inputinvoice/list"
-            s_url = f"https://coretaxdjp.pajak.go.id/einvoiceportal/api/{api_endpoint}"
-            
-            payload = {
-                "TaxpayerAggregateIdentifier": tid, 
-                "First": 0, "Rows": 1, "LanguageId": "id-ID", 
-                "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": no_faktur, "MatchMode": "equals"}]
-            }
-            if is_pk:
-                payload["SellerTaxpayerAggregateIdentifier"] = tid
-            else:
-                payload["BuyerTaxpayerAggregateIdentifier"] = tid
-
+            s_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/inputinvoice/list"
+            payload = {"BuyerTaxpayerAggregateIdentifier": tid, "TaxpayerAggregateIdentifier": tid, "First": 0, "Rows": 1, "LanguageId": "id-ID", "Filters": [{"PropertyName": "TaxInvoiceNumber", "Value": no_faktur, "MatchMode": "equals"}]}
             resp = requests.post(s_url, headers=headers, json=payload, timeout=15).json()
             data = resp.get("Payload", {}).get("Data", [])
-            if not data: return None, f"Faktur tidak ditemukan di server ({jenis_pajak})", None
+            if not data: return None, "Faktur tidak ditemukan di server", None
 
             inv = data[0]
             d_url = "https://coretaxdjp.pajak.go.id/einvoiceportal/api/DownloadInvoice/download-invoice-document"
-            # BUGS DJP CORETAX: PDF Download API always requires "Input" even for Output invoices (PK)!
-            menu_type = "Input" 
-            d_payload = {"EInvoiceRecordIdentifier": inv["RecordId"], "EInvoiceAggregateIdentifier": inv["AggregateIdentifier"], "DocumentAggregateIdentifier": inv["DocumentFormAggregateIdentifier"], "TaxpayerAggregateIdentifier": tid, "LetterNumber": no_faktur, "EInvoiceMenuType": menu_type, "TaxInvoiceStatus": "APPROVED"}
+            d_payload = {"EInvoiceRecordIdentifier": inv["RecordId"], "EInvoiceAggregateIdentifier": inv["AggregateIdentifier"], "DocumentAggregateIdentifier": inv["DocumentFormAggregateIdentifier"], "TaxpayerAggregateIdentifier": tid, "LetterNumber": no_faktur, "EInvoiceMenuType": "Input", "TaxInvoiceStatus": "APPROVED"}
             d_resp = requests.post(d_url, headers=headers, json=d_payload, timeout=15).json()
             pdf_b64 = d_resp.get("Content")
             if not pdf_b64: return None, "Data PDF kosong dari server", inv
@@ -534,171 +678,6 @@ class CoreTaxApp(ctk.CTk):
             return extracted_items, "Success", inv
         except Exception as e: return None, str(e), None
 
-    def _process_single_sheet(self, wb, target_sheet_name, jenis_pajak, tid):
-        try:
-            ws = wb[target_sheet_name]
-            # Konversi ke DataFrame dengan menyimpan NOMOR BARIS ASLI
-            data_raw = list(ws.values)
-            h_idx = 0
-            for i, row in enumerate(data_raw):
-                row_str = [str(v).upper() if v else "" for v in row]
-                if any("NOMOR FAKTUR" in v for v in row_str):
-                    h_idx = i
-                    break
-            
-            cols = data_raw[h_idx]
-            # Tambahkan kolom internal untuk melacak Row Excel Asli
-            rows_with_meta = []
-            for i, row in enumerate(data_raw[h_idx+1:]):
-                row_list = list(row)
-                row_list.append(i + h_idx + 2) # Ini nomor baris Excel asli (1-based)
-                rows_with_meta.append(row_list)
-            
-            headers = [str(c).strip() if c else f"COL_{i}" for i, c in enumerate(cols)]
-            df = pd.DataFrame(rows_with_meta, columns=headers + ["_EXCEL_ROW"])
-            
-            self.dynamic_categories = {}
-            blacklist = ["TOTAL", "DPP", "PPN", "JUMLAH PENJABARAN", "SELISIH", "QTY", "KET"]
-            
-            for i, col in enumerate(headers):
-                col_str = str(col).strip().upper()
-                if "QTY" in col_str:
-                    if i + 1 < len(headers):
-                        raw_cat = str(headers[i+1]).strip()
-                        is_blacklisted = any(b in raw_cat.upper() for b in blacklist)
-                        if not is_blacklisted and raw_cat:
-                            self.dynamic_categories[raw_cat] = (i+2, i+1) # (HargaCol, QtyCol)
-            
-            self.add_log(f"[+] Kategori terdeteksi di {target_sheet_name}: {', '.join(self.dynamic_categories.keys())}")
-            
-            # Ambil index kolom penting
-            c_faktur = next((c for c in headers if "NOMOR FAKTUR" in str(c).upper()), None)
-            c_harga  = next((c for c in headers if "HARGA JUAL" in str(c).upper() or "HARGA" in str(c).upper()), None)
-            c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
-            
-            if not c_faktur:
-                self.add_log(f"[!] ERROR: Kolom 'Nomor Faktur' tidak ditemukan di {target_sheet_name}.")
-                return 0
-
-            def is_truly_empty(v):
-                if v is None or pd.isna(v): return True
-                s_v = str(v).strip().lower()
-                if s_v == "" or s_v == "0" or s_v == "0.0" or s_v == "nan": return True
-                return False
-
-            def should_process(r):
-                if pd.isna(r[c_faktur]): return False
-                has_any_real_entry = False
-                for cat in self.dynamic_categories.keys():
-                    if not is_truly_empty(r[cat]):
-                        has_any_real_entry = True
-                        break
-                pj = r[c_penjabaran]
-                if has_any_real_entry: return False
-                if pj is not None:
-                    s_pj = str(pj).strip()
-                    if s_pj.startswith("="): return True
-                    try:
-                        f_pj = float(s_pj.replace(",",""))
-                        if f_pj > 0: return False
-                    except: pass
-                return True
-
-            targets = df[df.apply(should_process, axis=1)]
-            
-            if targets.empty:
-                self.add_log(f"[√] Seluruh baris target di {target_sheet_name} sudah BERSIH.")
-                return 0
-            else:
-                self.add_log(f"[+] Ditemukan {len(targets)} baris baru untuk diproses di {target_sheet_name}.")
-
-            if self.mode_var.get() != "CHECK-ONLY (PDF Saja)":
-                self.add_log(f"[*] Tahap 1: Membersihkan {len(targets)} baris...")
-                for _, row in targets.iterrows():
-                    ex_row = int(row["_EXCEL_ROW"])
-                    for cat_name, (p_idx, q_idx) in self.dynamic_categories.items():
-                        ws.cell(row=ex_row, column=p_idx).value = None
-                        ws.cell(row=ex_row, column=q_idx).value = None
-
-            if self.mode_var.get() == "ONLY-CLEAR (Hapus Saja)":
-                return 0
-
-            all_invoice_data = {}
-            all_unique_names = set()
-            
-            self.add_log(f"[*] Tahap 2: Men-scan SELURUH PDF (Global Scan) {target_sheet_name}...")
-            for index, row in targets.iterrows():
-                raw_f = row[c_faktur]
-                expected_total = pd.to_numeric(row[c_harga], errors='coerce') if c_harga else 0
-                ex_row = int(row["_EXCEL_ROW"])
-                faktur = "{:.0f}".format(raw_f).zfill(17) if isinstance(raw_f, (float, int)) else str(raw_f).zfill(17)
-                
-                self.add_log(f"    - Scanning PDF Baris {ex_row}: {faktur}")
-                items, msg, raw_json = self._fetch_pdf_items(faktur, tid, expected_total, jenis_pajak)
-                if items:
-                    self.add_log(f"--- [RAW DATA DARI SERVER: {faktur}] ---")
-                    all_invoice_data[ex_row] = items
-                    for it in items: 
-                        all_unique_names.add(it['name'])
-                        self.add_log(f"      > Item: {it['name']} | Qty: {it['qty']} | Total: {it['total']:,}")
-                else:
-                    self.add_log(f"      [!] Skip: {msg}")
-
-            if not all_invoice_data:
-                self.add_log("[!] Scan selesai, tidak ada data yang ditemukan.")
-                return 0
-
-            self.add_log(f"[?] Menunggu validasi mapping untuk {len(all_unique_names)} barang ({jenis_pajak})...")
-            mapping_window = MappingWindow(self, list(all_unique_names), list(self.dynamic_categories.keys()))
-            self.wait_window(mapping_window)
-            
-            final_mapping = mapping_window.result
-            
-            if not final_mapping:
-                self.add_log("[!] Mapping dibatalkan.")
-                return 0
-
-            self.add_log("[*] Tahap 4: Mengisi data dengan Logika Akumulasi...")
-            success_count = 0
-            
-            for ex_row, items in all_invoice_data.items():
-                category_totals = {}
-                for it in items:
-                    cat = final_mapping.get(it['name'])
-                    if cat and cat != "Abaikan":
-                        if cat not in category_totals: category_totals[cat] = {'qty': 0, 'total': 0}
-                        category_totals[cat]['qty'] += it['qty']
-                        category_totals[cat]['total'] += it['total']
-                
-                for cat, val in category_totals.items():
-                    if cat in self.dynamic_categories:
-                        p_idx, q_idx = self.dynamic_categories[cat]
-                        ws.cell(row=ex_row, column=p_idx).value = val['total']
-                        ws.cell(row=ex_row, column=p_idx).number_format = '#,##0'
-                        ws.cell(row=ex_row, column=q_idx).value = val['qty']
-                        ws.cell(row=ex_row, column=q_idx).number_format = '#,##0.00'
-                        self.add_log(f"      [√] Baris {ex_row} | {cat}: Total={val['total']:,}")
-
-                cat_cols = [p for p, q in self.dynamic_categories.values()]
-                if cat_cols:
-                    min_l = openpyxl.utils.get_column_letter(min(cat_cols))
-                    max_l = openpyxl.utils.get_column_letter(max(cat_cols))
-                    pj_idx = self._get_col_idx(ws, "PENJABARAN")
-                    if pj_idx:
-                        ws.cell(row=ex_row, column=pj_idx).value = f"=SUM({min_l}{ex_row}:{max_l}{ex_row})"
-                        ws.cell(row=ex_row, column=pj_idx).number_format = '#,##0'
-
-                diff_idx = self._get_col_idx(ws, "Selisih")
-                if diff_idx: ws.cell(row=ex_row, column=diff_idx).value = "-"
-                success_count += 1
-
-            return success_count
-        except Exception as e:
-            self.add_log(f"[!] ERROR di sheet {target_sheet_name}: {str(e)}")
-            return 0
-
-
 if __name__ == "__main__":
     app = CoreTaxApp()
     app.mainloop()
-
