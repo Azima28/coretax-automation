@@ -205,96 +205,161 @@ class CoreTaxApp(ctk.CTk):
         self.setup_ui()
         
     def setup_ui(self):
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=0) # Input frame mengambil ukuran pas
-        self.grid_rowconfigure(3, weight=1) # Log frame mengambil sisa ruang (responsive)
+        self.configure(fg_color="#000000") # Pure black background for iOS style
+        self.geometry("1150x700") # Lebarkan window untuk layout 2 kolom
+        
+        self.grid_columnconfigure(0, weight=1) # Kiri: Pengaturan
+        self.grid_columnconfigure(1, weight=1) # Kanan: Logs
+        self.grid_rowconfigure(1, weight=1) 
         
         # Font settings
-        font_title = ("Segoe UI", 26, "bold")
-        font_label = ("Segoe UI", 13)
-        font_btn = ("Segoe UI", 13, "bold")
+        font_title = ("Segoe UI", 28, "bold")
+        font_label = ("Segoe UI", 14)
+        font_btn = ("Segoe UI", 14, "bold")
+        font_link = ("Segoe UI", 14)
         
+        # Header
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        header_frame.grid(row=0, column=0, padx=25, pady=(25, 10), sticky="ew")
+        header_frame.grid(row=0, column=0, columnspan=2, padx=20, pady=(20, 10), sticky="ew")
         
-        ctk.CTkLabel(header_frame, text="ZiTax Automator", font=font_title).pack(side="left")
+        ctk.CTkLabel(header_frame, text="ZiTax Automator", font=font_title, text_color="#FFFFFF").pack(side="left")
         
-        btn_about = ctk.CTkButton(header_frame, text="About", width=70, corner_radius=18, font=font_btn, fg_color="#5E5CE6", hover_color="#4543A9", command=self.show_about)
-        btn_about.pack(side="right", padx=10)
-        
-        self.status_label = ctk.CTkLabel(header_frame, text="Status: Terhubung (TID: 275bb...)", text_color="#34C759", font=font_label)
+        self.status_label = ctk.CTkLabel(header_frame, text="Terhubung (TID: 275...)", text_color="#8E8E93", font=font_label)
         self.status_label.pack(side="right", padx=15)
         
-        # Session Inputs
-        session_frame = ctk.CTkFrame(self, fg_color="#2C2C2E", corner_radius=12)
-        session_frame.grid(row=1, column=0, padx=25, pady=10, sticky="ew")
-        session_frame.grid_columnconfigure(1, weight=1)
+        # ================= KOLOM KIRI: PENGATURAN =================
+        left_panel = ctk.CTkFrame(self, fg_color="transparent")
+        left_panel.grid(row=1, column=0, sticky="nsew", padx=(20, 10))
+        left_panel.grid_columnconfigure(0, weight=1)
         
-        ctk.CTkLabel(session_frame, text="Bearer Token", font=font_label).grid(row=0, column=0, padx=15, pady=10, sticky="w")
-        self.entry_token = ctk.CTkEntry(session_frame, placeholder_text="Masukkan Bearer Token...", font=font_label, corner_radius=8, border_width=1)
-        self.entry_token.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-        
-        ctk.CTkLabel(session_frame, text="Cookie", font=font_label).grid(row=1, column=0, padx=15, pady=10, sticky="w")
-        self.entry_cookie = ctk.CTkEntry(session_frame, placeholder_text="Masukkan Cookie...", font=font_label, corner_radius=8, border_width=1)
-        self.entry_cookie.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
-        
-        ctk.CTkLabel(session_frame, text="Taxpayer ID", font=font_label).grid(row=2, column=0, padx=15, pady=10, sticky="w")
-        self.entry_tid = ctk.CTkEntry(session_frame, placeholder_text="Masukkan Taxpayer ID...", font=font_label, corner_radius=8, border_width=1)
-        self.entry_tid.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
-        
-        btn_action_frame = ctk.CTkFrame(session_frame, fg_color="transparent")
-        btn_action_frame.grid(row=0, column=2, rowspan=3, padx=15, pady=10, sticky="ns")
+        input_kwargs = {"font": font_label, "fg_color": "#2C2C2E", "border_width": 1, "border_color": "#38383A", "text_color": "#0A84FF", "corner_radius": 6}
 
-        self.btn_login = ctk.CTkButton(btn_action_frame, text="Login CoreTax", font=font_btn, corner_radius=8, command=self.start_login, fg_color="#0A84FF", hover_color="#0056B3")
-        self.btn_login.pack(expand=True, fill="both", pady=(0, 5))
+        # --- GROUP 1: KONEKSI CORETAX ---
+        ctk.CTkLabel(left_panel, text="KONEKSI CORETAX", font=("Segoe UI", 12), text_color="#8E8E93").pack(anchor="w", padx=15, pady=(0, 5))
         
-        ctk.CTkButton(btn_action_frame, text="Simpan Sesi", font=font_btn, corner_radius=8, command=self.save_session, fg_color="#34C759", hover_color="#248A3D").pack(expand=True, fill="both", pady=(5, 0))
-
-        # Excel Inputs
-        input_frame = ctk.CTkFrame(self, fg_color="#2C2C2E", corner_radius=12)
-        input_frame.grid(row=2, column=0, padx=25, pady=10, sticky="ew")
-        input_frame.grid_columnconfigure(1, weight=1)
+        group1 = ctk.CTkFrame(left_panel, fg_color="#1C1C1E", corner_radius=10)
+        group1.pack(fill="x", pady=(0, 15))
         
-        ctk.CTkLabel(input_frame, text="Target Excel", font=font_label).grid(row=0, column=0, padx=15, pady=10, sticky="w")
-        self.entry_file = ctk.CTkEntry(input_frame, placeholder_text="Pilih file excel untuk diproses...", font=font_label, corner_radius=8, border_width=1)
-        self.entry_file.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-        ctk.CTkButton(input_frame, text="Browse", width=100, font=font_btn, corner_radius=8, fg_color="#636366", hover_color="#48484A", command=self.browse_file).grid(row=0, column=2, padx=15, pady=10)
+        # Row 1
+        row1 = ctk.CTkFrame(group1, fg_color="transparent")
+        row1.pack(fill="x", padx=15, pady=8)
+        row1.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row1, text="Bearer Token", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
+        self.entry_token = ctk.CTkEntry(row1, placeholder_text="Token...", **input_kwargs)
+        self.entry_token.grid(row=0, column=1, sticky="ew")
+        
+        ctk.CTkFrame(group1, height=1, fg_color="#38383A").pack(fill="x", padx=15)
+        
+        # Row 2
+        row2 = ctk.CTkFrame(group1, fg_color="transparent")
+        row2.pack(fill="x", padx=15, pady=8)
+        row2.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row2, text="Cookie", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
+        self.entry_cookie = ctk.CTkEntry(row2, placeholder_text="id-ID...", **input_kwargs)
+        self.entry_cookie.grid(row=0, column=1, sticky="ew")
+        self.entry_cookie.insert(0, "id-ID")
+        
+        ctk.CTkFrame(group1, height=1, fg_color="#38383A").pack(fill="x", padx=15)
+        
+        # Row 3
+        row3 = ctk.CTkFrame(group1, fg_color="transparent")
+        row3.pack(fill="x", padx=15, pady=8)
+        row3.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row3, text="Taxpayer ID", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
+        self.entry_tid = ctk.CTkEntry(row3, placeholder_text="ID...", **input_kwargs)
+        self.entry_tid.grid(row=0, column=1, sticky="ew")
+        self.entry_tid.insert(0, "275bb07a-d021-4389-943e-a740246a56e8")
+        
+        ctk.CTkFrame(group1, height=1, fg_color="#38383A").pack(fill="x", padx=15)
+        
+        # Row 4 (Actions)
+        row4 = ctk.CTkFrame(group1, fg_color="transparent")
+        row4.pack(fill="x", padx=15, pady=10)
+        row4.grid_columnconfigure((0,1), weight=1)
+        
+        btn_kwargs = {"font": font_link, "fg_color": "transparent", "text_color": "#0A84FF", "hover_color": "#2C2C2E", "border_width": 1, "border_color": "#38383A", "corner_radius": 6}
+        
+        self.btn_login = ctk.CTkButton(row4, text="Login CoreTax", command=self.start_login, **btn_kwargs)
+        self.btn_login.grid(row=0, column=0, sticky="ew", padx=5)
+        
+        btn_save = ctk.CTkButton(row4, text="Simpan Sesi", command=self.save_session, **btn_kwargs)
+        btn_save.grid(row=0, column=1, sticky="ew", padx=5)
 
-        ctk.CTkLabel(input_frame, text="Target Sheet", font=font_label).grid(row=1, column=0, padx=15, pady=10, sticky="w")
+        # --- GROUP 2: KONFIGURASI PROSES ---
+        ctk.CTkLabel(left_panel, text="KONFIGURASI PROSES", font=("Segoe UI", 12), text_color="#8E8E93").pack(anchor="w", padx=15, pady=(5, 5))
+        
+        group2 = ctk.CTkFrame(left_panel, fg_color="#1C1C1E", corner_radius=10)
+        group2.pack(fill="x", pady=(0, 20))
+        
+        # File Row
+        row_f = ctk.CTkFrame(group2, fg_color="transparent")
+        row_f.pack(fill="x", padx=15, pady=8)
+        row_f.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row_f, text="File Excel", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
+        self.entry_file = ctk.CTkEntry(row_f, placeholder_text="Pilih file...", **input_kwargs)
+        self.entry_file.configure(text_color="#8E8E93")
+        self.entry_file.grid(row=0, column=1, sticky="ew")
+        ctk.CTkButton(row_f, text="Browse", width=60, command=self.browse_file, **btn_kwargs).grid(row=0, column=2, padx=(5,0))
+        
+        ctk.CTkFrame(group2, height=1, fg_color="#38383A").pack(fill="x", padx=15)
+        
+        # Sheet Row
+        row_s = ctk.CTkFrame(group2, fg_color="transparent")
+        row_s.pack(fill="x", padx=15, pady=8)
+        row_s.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row_s, text="Target Sheet", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
         self.sheet_var = ctk.StringVar(value="Hanya PM (Pajak Masukan)")
-        self.sheet_menu = ctk.CTkOptionMenu(input_frame, values=["Hanya PM (Pajak Masukan)", "Hanya PK (Pajak Keluaran)", "Keduanya (PK & PM)"], variable=self.sheet_var, font=font_label, corner_radius=8, fg_color="#3A3A3C", button_color="#48484A")
-        self.sheet_menu.grid(row=1, column=1, padx=10, pady=10, sticky="ew")
-
-        ctk.CTkLabel(input_frame, text="Mode Eksekusi", font=font_label).grid(row=2, column=0, padx=15, pady=10, sticky="w")
-        self.mode_var = ctk.StringVar(value="AUTO-PROCESS (Clear & Fill)")
-        self.mode_menu = ctk.CTkOptionMenu(input_frame, values=["AUTO-PROCESS (Clear & Fill)", "ONLY-CLEAR (Hapus Saja)", "CHECK-ONLY (PDF Saja)"], variable=self.mode_var, font=font_label, corner_radius=8, fg_color="#3A3A3C", button_color="#48484A")
-        self.mode_menu.grid(row=2, column=1, padx=10, pady=10, sticky="ew")
-
-        # Row 3: QUICK CHECK
-        ctk.CTkLabel(input_frame, text="Cek 1 Faktur", font=font_label).grid(row=3, column=0, padx=15, pady=10, sticky="w")
-        self.entry_single_faktur = ctk.CTkEntry(input_frame, placeholder_text="Masukkan nomor faktur spesifik...", font=font_label, corner_radius=8, border_width=1)
-        self.entry_single_faktur.grid(row=3, column=1, padx=10, pady=10, sticky="ew")
-        self.btn_quick_check = ctk.CTkButton(input_frame, text="Cek Cepat", width=100, font=font_btn, corner_radius=8, command=self.quick_check, fg_color="#FF9F0A", hover_color="#D17D00", text_color="white")
-        self.btn_quick_check.grid(row=3, column=2, padx=15, pady=10)
+        self.sheet_menu = ctk.CTkOptionMenu(row_s, values=["Hanya PM (Pajak Masukan)", "Hanya PK (Pajak Keluaran)", "Keduanya (PK & PM)"], variable=self.sheet_var, font=font_label, fg_color="#2C2C2E", button_color="#2C2C2E", text_color="#0A84FF", dropdown_fg_color="#1C1C1E")
+        self.sheet_menu.grid(row=0, column=1, sticky="e")
         
-        # Log Box Frame
-        log_frame = ctk.CTkFrame(self, fg_color="transparent")
-        log_frame.grid(row=3, column=0, padx=25, pady=10, sticky="nsew")
-        log_frame.grid_columnconfigure(0, weight=1)
-        log_frame.grid_rowconfigure(1, weight=1)
+        ctk.CTkFrame(group2, height=1, fg_color="#38383A").pack(fill="x", padx=15)
         
-        btn_clear = ctk.CTkButton(log_frame, text="Bersihkan Log", width=120, height=28, font=font_btn, corner_radius=8, fg_color="#FF3B30", hover_color="#C93429", command=lambda: self.log_box.delete("0.0", "end"))
-        btn_clear.grid(row=0, column=0, sticky="e", pady=(0, 10))
+        # Mode Row
+        row_m = ctk.CTkFrame(group2, fg_color="transparent")
+        row_m.pack(fill="x", padx=15, pady=8)
+        row_m.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row_m, text="Eksekusi", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
+        self.mode_var = ctk.StringVar(value="AUTO-PROCESS")
+        self.mode_menu = ctk.CTkOptionMenu(row_m, values=["AUTO-PROCESS", "ONLY-CLEAR", "CHECK-ONLY"], variable=self.mode_var, font=font_label, fg_color="#2C2C2E", button_color="#2C2C2E", text_color="#0A84FF", dropdown_fg_color="#1C1C1E")
+        self.mode_menu.grid(row=0, column=1, sticky="e")
         
-        self.log_box = ctk.CTkTextbox(log_frame, font=("Consolas", 12), fg_color="#1C1C1E", border_width=1, border_color="#3A3A3C", corner_radius=12)
+        ctk.CTkFrame(group2, height=1, fg_color="#38383A").pack(fill="x", padx=15)
+        
+        # Quick Check Row
+        row_q = ctk.CTkFrame(group2, fg_color="transparent")
+        row_q.pack(fill="x", padx=15, pady=8)
+        row_q.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row_q, text="Cek 1 Faktur", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
+        self.entry_single_faktur = ctk.CTkEntry(row_q, placeholder_text="Nomor faktur...", **input_kwargs)
+        self.entry_single_faktur.grid(row=0, column=1, sticky="ew")
+        
+        btn_cek_kwargs = {"font": font_link, "fg_color": "transparent", "text_color": "#FF9F0A", "hover_color": "#2C2C2E", "border_width": 1, "border_color": "#38383A", "corner_radius": 6}
+        ctk.CTkButton(row_q, text="Cek", width=60, command=self.quick_check, **btn_cek_kwargs).grid(row=0, column=2, padx=(5,0))
+        
+        # ================= KOLOM KANAN: LOG TERMINAL =================
+        right_panel = ctk.CTkFrame(self, fg_color="transparent")
+        right_panel.grid(row=1, column=1, sticky="nsew", padx=(10, 20), pady=(0, 20))
+        right_panel.grid_columnconfigure(0, weight=1)
+        right_panel.grid_rowconfigure(1, weight=1)
+        
+        log_header = ctk.CTkFrame(right_panel, fg_color="transparent")
+        log_header.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        ctk.CTkLabel(log_header, text="SYSTEM LOG", font=("Segoe UI", 12), text_color="#8E8E93").pack(side="left")
+        ctk.CTkButton(log_header, text="Clear", font=("Segoe UI", 12), fg_color="transparent", text_color="#FF3B30", width=40, hover_color="#1C1C1E", command=lambda: self.log_box.delete("0.0", "end")).pack(side="right")
+        
+        self.log_box = ctk.CTkTextbox(right_panel, font=("Consolas", 12), fg_color="#1C1C1E", text_color="#FFFFFF", corner_radius=10, border_width=1, border_color="#38383A")
         self.log_box.grid(row=1, column=0, sticky="nsew")
         
-        self.btn_run = ctk.CTkButton(self, text="Mulai Pemrosesan", height=55, corner_radius=12, command=self.start_process, font=("Segoe UI", 16, "bold"), fg_color="#0A84FF", hover_color="#0056B3")
-        self.btn_run.grid(row=4, column=0, padx=25, pady=(10, 25), sticky="ew")
+        # --- BOTTOM FIX ACTION (Spans across both columns) ---
+        bottom_frame = ctk.CTkFrame(self, fg_color="transparent")
+        bottom_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=20, pady=(0, 20))
+        bottom_frame.grid_columnconfigure(0, weight=1)
         
-        # Default values
-        self.entry_cookie.insert(0, "id-ID")
-        self.entry_tid.insert(0, "275bb07a-d021-4389-943e-a740246a56e8")
+        self.btn_run = ctk.CTkButton(bottom_frame, text="Mulai Pemrosesan", height=55, corner_radius=12, command=self.start_process, font=("Segoe UI", 16, "bold"), fg_color="#0A84FF", hover_color="#0056B3")
+        self.btn_run.grid(row=0, column=0, sticky="ew")
+        
+        font_link_underline = ("Segoe UI", 14, "underline")
+        ctk.CTkButton(bottom_frame, text="About ZiTax", font=font_link_underline, fg_color="transparent", text_color="#8E8E93", hover_color="#1C1C1E", command=self.show_about).grid(row=1, column=0, pady=(10,0))
 
     def show_about(self):
         AboutWindow(self)
