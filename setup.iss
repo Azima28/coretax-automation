@@ -1,6 +1,6 @@
 [Setup]
 AppName=ZiTax Automator
-AppVersion=1.3
+AppVersion=1.4
 DefaultDirName={autopf}\ZiTaxAutomator
 DefaultGroupName=ZiTax Automator
 UninstallDisplayIcon={app}\ZiTax_Automator.exe
@@ -8,7 +8,7 @@ SetupIconFile=zitax_icon.ico
 Compression=lzma2
 SolidCompression=yes
 OutputDir=Output
-OutputBaseFilename=ZiTax_Automator_Setup_Full_v1.5
+OutputBaseFilename=ZiTax_Automator_Setup_Full_v1.6
 PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64
 ArchitecturesAllowed=x64

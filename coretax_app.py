@@ -43,7 +43,7 @@ class AboutWindow(ctk.CTkToplevel):
                 pass
                 
         ctk.CTkLabel(self, text="ZiTax Automator", font=("Arial", 22, "bold")).pack(pady=5)
-        ctk.CTkLabel(self, text="Version 1.3 Premium", font=("Arial", 12)).pack(pady=(0, 15))
+        ctk.CTkLabel(self, text="Version 1.4 Premium", font=("Arial", 12)).pack(pady=(0, 15))
         
         # Clickable links
         ig_label = ctk.CTkLabel(self, text="Instagram: @zimm.dev", font=("Arial", 14), text_color="#3498db", cursor="hand2")
@@ -401,6 +401,17 @@ class CoreTaxApp(ctk.CTk):
         self.mode_var = ctk.StringVar(value="AUTO-PROCESS")
         self.mode_menu = ctk.CTkOptionMenu(row_m, values=["AUTO-PROCESS", "ONLY-CLEAR", "CHECK-ONLY"], variable=self.mode_var, font=font_label, fg_color="#2C2C2E", button_color="#2C2C2E", text_color="#0A84FF", dropdown_fg_color="#1C1C1E")
         self.mode_menu.grid(row=0, column=1, sticky="e")
+        
+        ctk.CTkFrame(group2, height=1, fg_color="#38383A").pack(fill="x", padx=15)
+        
+        # Penjabaran Column Fallback Row
+        row_p = ctk.CTkFrame(group2, fg_color="transparent")
+        row_p.pack(fill="x", padx=15, pady=8)
+        row_p.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(row_p, text="Kolom Penjabaran", font=font_label, text_color="#FFFFFF", width=120, anchor="w").grid(row=0, column=0)
+        self.entry_penjabaran = ctk.CTkEntry(row_p, placeholder_text="Jumlah Penjabaran, Jumlah...", **input_kwargs)
+        self.entry_penjabaran.grid(row=0, column=1, sticky="ew")
+        self.entry_penjabaran.insert(0, "Jumlah Penjabaran, Jumlah")
         
         ctk.CTkFrame(group2, height=1, fg_color="#38383A").pack(fill="x", padx=15)
         
@@ -820,10 +831,33 @@ class CoreTaxApp(ctk.CTk):
             # Ambil index kolom penting
             c_faktur = next((c for c in headers if "NOMOR FAKTUR" in str(c).upper()), None)
             c_harga  = next((c for c in headers if "HARGA JUAL" in str(c).upper() or "HARGA" in str(c).upper()), None)
-            c_penjabaran = next((c for c in headers if "PENJABARAN" in str(c).upper()), None)
+            
+            # Cek fallback dari input GUI
+            fallback_input = self.entry_penjabaran.get().strip()
+            fallbacks = [f.strip().upper() for f in fallback_input.split(",") if f.strip()]
+            if not fallbacks:
+                fallbacks = ["JUMLAH PENJABARAN", "PENJABARAN", "JUMLAH"]
+                
+            c_penjabaran = None
+            # 1. Coba exact match dahulu
+            for fb_name in fallbacks:
+                c_penjabaran = next((c for c in headers if str(c).upper().strip() == fb_name), None)
+                if c_penjabaran:
+                    break
+            
+            # 2. Coba partial/fuzzy match jika exact match tidak ditemukan
+            if not c_penjabaran:
+                for fb_name in fallbacks:
+                    c_penjabaran = next((c for c in headers if fb_name in str(c).upper().strip()), None)
+                    if c_penjabaran:
+                        break
             
             if not c_faktur:
                 self.add_log(f"[!] ERROR: Kolom 'Nomor Faktur' tidak ditemukan di {target_sheet_name}.")
+                return 0
+
+            if not c_penjabaran:
+                self.add_log(f"[!] ERROR: Kolom Penjabaran (dari fallback: {fallback_input}) tidak ditemukan di {target_sheet_name}.")
                 return 0
 
             def is_truly_empty(v):
@@ -932,12 +966,13 @@ class CoreTaxApp(ctk.CTk):
                 if cat_cols:
                     min_l = openpyxl.utils.get_column_letter(min(cat_cols))
                     max_l = openpyxl.utils.get_column_letter(max(cat_cols))
-                    pj_idx = self._get_col_idx(ws, "PENJABARAN")
+                    pj_idx = headers.index(c_penjabaran) + 1 if c_penjabaran else None
                     if pj_idx:
                         ws.cell(row=ex_row, column=pj_idx).value = f"=SUM({min_l}{ex_row}:{max_l}{ex_row})"
                         ws.cell(row=ex_row, column=pj_idx).number_format = '#,##0'
 
-                diff_idx = self._get_col_idx(ws, "Selisih")
+                c_selisih = next((c for c in headers if "SELISIH" in str(c).upper()), None)
+                diff_idx = headers.index(c_selisih) + 1 if c_selisih else None
                 if diff_idx: ws.cell(row=ex_row, column=diff_idx).value = "-"
                 success_count += 1
 
